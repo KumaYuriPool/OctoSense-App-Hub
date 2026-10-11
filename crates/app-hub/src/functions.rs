@@ -5,8 +5,8 @@
 //! and exports when it loads it. A component is validated here, and its
 //! imports must all come from the WASI packages a host scopes to the app
 //! ([`ALLOWED_COMPONENT_IMPORTS`]). Whether the manifest may carry one
-//! (`requires: ["wasm-components-v1"]`, `storage` for files, `net` for
-//! HTTP) is the gate's check ([`crate::gate`]), which
+//! (`requires: ["wasm-components-v1"]`, plus `wasm.sockets@1` for sockets)
+//! is the gate's check ([`crate::gate`]), which
 //! also tells reviewers what each component reaches
 //! ([`ComponentInfo::reach`]).
 //!
@@ -19,15 +19,17 @@ use wasmparser::component_types::{ComponentDefinedType, ComponentEntityType, Com
 use wasmparser::types::TypesRef;
 use wasmparser::{ComponentTypeRef, Parser, Payload, PrimitiveValType, TypeBounds, Validator, WasmFeatures};
 
-/// The packages a component may import, every interface of these. The host
-/// gives `wasi:filesystem` only the app's storage folder and
-/// `octosense:host` only the host services the app is granted, as its
-/// script has them (OctoSense ADR 0014 phase 3). `wasi:http` reaches any
-/// host: an app's network declarations are shown at install and not
-/// enforced (OctoSense's ruling of 8 October 2026). Nothing else
-/// (`wasi:sockets`, other packages) is admitted.
+/// The packages a component may import. Files stay in the app's jail;
+/// host-service calls retain consent and account/sharing checks. HTTP and
+/// ordinary TCP/UDP/DNS use the host's network under its resource limits.
+/// Network declarations describe usage; they are not destination allowlists.
 pub const ALLOWED_COMPONENT_IMPORTS: &[&str] =
-    &["wasi:cli/", "wasi:clocks/", "wasi:filesystem/", "wasi:http/", "wasi:io/", "wasi:random/", "octosense:host/"];
+    &["wasi:cli/", "wasi:clocks/", "wasi:filesystem/", "wasi:http/", "wasi:io/", "wasi:random/", "wasi:sockets/", "octosense:host/"];
+
+/// An extensible host API requirement, not a new manifest `requires` feature:
+/// older catalogs must remain readable even when an app needs sockets.
+pub const SOCKETS_HOST_API: &str = "wasm.sockets";
+pub const SOCKETS_HOST_API_VERSION: u32 = 1;
 
 /// The allowed packages in words: "wasi:cli, wasi:clocks, … and
 /// octosense:host".
@@ -147,8 +149,8 @@ impl ComponentInfo {
             .collect()
     }
 
-    /// Whether it imports `wasi:filesystem`: the app's own files, which the
-    /// host gives it only with the `storage` capability.
+    /// Whether it imports `wasi:filesystem`: the app's own jailed files;
+    /// `storage` describes this usage.
     pub fn uses_files(&self) -> bool {
         self.imports.iter().any(|name| name.starts_with("wasi:filesystem/"))
     }
@@ -159,8 +161,26 @@ impl ComponentInfo {
         self.imports.iter().any(|name| name.starts_with("wasi:http/"))
     }
 
-    /// Whether it imports `octosense:host`: the host services its app is
-    /// granted, which it calls as the app's script does.
+    /// Whether it imports ordinary WASI TCP/UDP/DNS interfaces. Even a
+    /// network/types-only import requires the sockets host ABI.
+    pub fn uses_sockets(&self) -> bool {
+        self.imports.iter().any(|name| name.starts_with("wasi:sockets/"))
+    }
+
+    /// Socket imports require an explicit host ABI so older hosts can read
+    /// the catalog, but refuse this app before installing or running it.
+    pub fn missing_host_api(&self, manifest: &octosense_app_policy::AppManifest) -> Option<&'static str> {
+        if self.uses_sockets()
+            && manifest.host_api.as_ref().and_then(|api| api.required.get(SOCKETS_HOST_API)) != Some(&SOCKETS_HOST_API_VERSION)
+        {
+            Some("requires host_api.required wasm.sockets@1 (and requires host-api-v1)")
+        } else {
+            None
+        }
+    }
+
+    /// Whether it imports `octosense:host`: public host services called with
+    /// the same app identity and actual authorization as its script.
     pub fn uses_host_services(&self) -> bool {
         self.imports.iter().any(|name| name.starts_with("octosense:host/"))
     }
@@ -179,7 +199,7 @@ impl ComponentInfo {
         if self.uses_files() {
             reaches.push("files in its app folder".to_string());
         }
-        let network = self.uses_http();
+        let network = self.uses_http() || self.uses_sockets();
         if network {
             reaches.push("the network".to_string());
         }
@@ -444,6 +464,18 @@ mod tests {
     }
 
     #[test]
+    fn tcp_udp_and_dns_imports_are_allowed_and_disclosed_as_network() {
+        for interface in ["tcp", "tcp-create-socket", "udp", "udp-create-socket", "ip-name-lookup", "network", "instance-network"] {
+            let name = format!("wasi:sockets/{interface}@0.2.9");
+            let component = info(&[&name]);
+            assert!(component.refused_imports().is_empty(), "{interface}");
+            assert!(component.uses_sockets(), "{interface}");
+            assert_eq!(component.reach(), "the network, but no files or other app");
+        }
+        assert_eq!(info(&["wasi:sockets-extra/network@0.2.9"]).refused_imports(), ["wasi:sockets-extra/network@0.2.9"]);
+    }
+
+    #[test]
     fn the_reach_line_names_what_a_component_imports() {
         assert_eq!(info(&["wasi:cli/stdout@0.2.9"]).reach(), "nothing but its input");
         assert_eq!(
@@ -473,11 +505,11 @@ mod tests {
     #[test]
     fn only_the_scoped_wasi_packages_are_allowed() {
         let component = info(&["wasi:io/poll@0.2.9", "wasi:sockets/network@0.2.9", "wasi:http/types@0.2.9", "my:pkg/host", "octosense:host/services@0.1.0", "octosense:hostile/x"]);
-        assert_eq!(component.refused_imports(), ["wasi:sockets/network@0.2.9", "my:pkg/host", "octosense:hostile/x"]);
+        assert_eq!(component.refused_imports(), ["my:pkg/host", "octosense:hostile/x"]);
         assert!(component.uses_http());
         assert_eq!(
             allowed_import_packages(),
-            "wasi:cli, wasi:clocks, wasi:filesystem, wasi:http, wasi:io, wasi:random and octosense:host"
+            "wasi:cli, wasi:clocks, wasi:filesystem, wasi:http, wasi:io, wasi:random, wasi:sockets and octosense:host"
         );
         // A package name is matched whole: wasi:clocksmith is not wasi:clocks.
         assert_eq!(info(&["wasi:clocksmith/x"]).refused_imports(), ["wasi:clocksmith/x"]);

@@ -258,3 +258,48 @@ fn a_system_app_carries_its_components_in_its_bundle() {
         format!("component markdown (org.example.markdown 1.0.0) is missing from os.notesdemo's bundle (components/{}.wasm)", blake3_hex(NOTES))
     );
 }
+
+#[test]
+fn socket_apps_keep_catalog_readable_but_need_a_compatible_host_before_download() {
+    let mut f = Fixture::new();
+    let sockets = component_entry("org.example.netprobe", "1.0.0", NETPROBE);
+    let mut device = Device::new(&f);
+    let component_catalog = device.hub.catalog(1, vec![], vec![sockets.clone()]);
+    f.pin(&[dependency("network", &sockets)], &[], &[]);
+    f.socket_api();
+    let entry = f.entry_with(Some(&component_catalog));
+    // These are only RC5-known manifest features. Host API names are an
+    // extensible map, so a missing implementation refuses this app, not the
+    // signed catalog and its unrelated apps.
+    assert!(entry.manifest.requires.iter().all(|feature| ["host-api-v1", "wasm-shared-components-v1"].contains(&feature.as_str())));
+    device.offer(1, vec![entry.clone()], vec![sockets.clone()]);
+    assert!(device.store.resolve_components(&entry.manifest).is_ok());
+    let err = device.store.install_components(&entry.manifest, &mut |_| panic!("unsupported hosts must not download")).unwrap_err();
+    assert_eq!(err, "this host does not implement required APIs: wasm.sockets@1");
+    assert_eq!(device.store.install_staged("example-app", &f.bundle, &device.store.publisher_keys(), &today()).unwrap_err(), err);
+    assert!(stored_files(&device.root).is_empty());
+
+    device.store = device.store.with_host_api_versions(std::collections::BTreeMap::from([
+        ("app_policy.device_consent".into(), 1), ("wasm.sockets".into(), 1),
+    ]));
+    device.store.install_components(&entry.manifest, &mut |_| Ok(NETPROBE.to_vec())).unwrap();
+    device.store.install_staged("example-app", &f.bundle, &device.store.publisher_keys(), &today()).unwrap();
+    assert_eq!(device.store.resolved_components("example-app").unwrap().len(), 1);
+    device.store.may_run("example-app").unwrap();
+    // Availability is checked again at launch, independently of installation.
+    device.store = device.store.with_host_api_versions(std::collections::BTreeMap::new());
+    assert_eq!(device.store.may_run("example-app").unwrap_err(), err);
+}
+
+#[test]
+fn shared_socket_imports_cannot_skip_the_app_requirement_even_if_already_cached() {
+    let mut f = Fixture::new();
+    let sockets = component_entry("org.example.netprobe", "1.0.0", NETPROBE);
+    let mut device = Device::new(&f);
+    device.offer(1, vec![], vec![sockets.clone()]);
+    f.pin(&[dependency("network", &sockets)], &[], &[]);
+    components::keep(&device.root, &blake3_hex(NETPROBE), NETPROBE).unwrap();
+    let err = device.store.resolve_components(&f.manifest).unwrap_err();
+    assert!(err.contains("requires host_api.required wasm.sockets@1"), "{err}");
+    assert_eq!(device.store.install_components(&f.manifest, &mut |_| panic!("no download on missing ABI")).unwrap_err(), err);
+}

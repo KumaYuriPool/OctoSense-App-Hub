@@ -132,7 +132,7 @@ two release files.
 component, run the same gate. It refuses the release when:
 
 - the file is not a valid component, or imports anything outside `wasi:cli`,
-  `wasi:clocks`, `wasi:filesystem`, `wasi:http`, `wasi:io`, `wasi:random` and
+  `wasi:clocks`, `wasi:filesystem`, `wasi:http`, `wasi:io`, `wasi:random`, `wasi:sockets` and
   `octosense:host`, as for an app's own component;
 - the file's BLAKE3 digest, size, imports or exports differ from the release;
 - the id breaks the app id rules, starts with `os.`, or is an app's id in the
@@ -147,6 +147,13 @@ An update must come from the same repository, owner and workflow as the
 earlier versions. Reviewers also see what the component reaches, for
 example: `org.example.markdown 1.0.0 is a component that reaches the clock,
 random numbers and files in its app folder, but no network or other app`.
+
+Socket imports now use the extensible host API requirement `wasm.sockets@1`.
+An app pinning such a component must require it, and the store checks actual
+host support before installation and at launch. This does not add a manifest
+feature that would make RC5 reject the entire catalog; see the current
+[publishing rules](../PUBLISHING.md#shared-components). Socket support is not
+in RC5.
 
 ### 4. The app contract
 

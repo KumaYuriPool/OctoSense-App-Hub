@@ -252,12 +252,9 @@ fn check_bundle_for(
     if declares_wasm && modules == 0 && manifest.components.is_empty() {
         findings.push(Finding::warn("functions", "the bundle declares the wasm capability but carries no fns/*.wasm"));
     }
-    // A component (OctoSense ADR 0014) also reaches the clock, random numbers
-    // and, with `storage`, the app's own files. Admission has validated it
-    // and its imports; the manifest must require the feature, so a host whose
-    // `wasm` service loads only modules refuses the app instead of failing at
-    // its first call, and must grant storage for files. Reviewers see what
-    // each component reaches.
+    // A component also reaches supported WASI interfaces. Admission validated
+    // its imports; required ABIs keep unsupported hosts from installing it.
+    // Reviewers see its reach even when usage disclosures are omitted.
     let requires_components = manifest.requires.iter().any(|f| f == crate::functions::COMPONENTS_FEATURE);
     let declares_storage = manifest.capabilities.iter().any(|c| c == "storage");
     let declares_net = manifest.capabilities.iter().any(|c| c == "net");
@@ -280,6 +277,12 @@ fn check_bundle_for(
                 "functions",
                 format!("{name} is a WebAssembly component; the manifest must require {}", crate::functions::COMPONENTS_FEATURE),
             ));
+        }
+        if let Some(missing) = info.missing_host_api(&manifest) {
+            findings.push(Finding::refuse("functions", format!("{name} {missing}")));
+        }
+        if info.uses_sockets() && !declares_net {
+            findings.push(Finding::warn("functions", format!("{name} imports wasi:sockets; disclose net usage")));
         }
         if info.uses_files() && !declares_storage {
             findings.push(Finding::warn(
@@ -315,7 +318,7 @@ fn check_bundle_for(
     // Each component the manifest names must resolve: from the catalog for a
     // store app (the exact version, offered, hashing to the pinned digest),
     // from the bundle's components/<blake3>.wasm for a system app. The app
-    // must grant what each imports, as for its own components, and
+    // must require each imported ABI, as for its own components, and
     // reviewers see what each reaches.
     shared_component_findings(bundle, &manifest, &bundled_components, previous, system_development, &mut findings);
 
@@ -446,7 +449,7 @@ fn check_bundle_for(
 
 /// The `components` findings for an app's shared components (App Hub ADR
 /// 0003): each resolved from `previous` (a store app) or from the bundle's
-/// `components/` (a system app), held to the app's grants, and told to
+/// `components/` (a system app), checked against required ABIs, and told to
 /// reviewers.
 fn shared_component_findings(
     bundle: &Path,
@@ -512,8 +515,11 @@ fn shared_component_findings(
             ));
             continue;
         };
-        if let Some(missing) = crate::components::missing_grant(manifest, &info) {
+        if let Some(missing) = info.missing_host_api(manifest) {
             findings.push(Finding::refuse("components", format!("component {} {missing}", dependency.describe())));
+        }
+        if info.uses_sockets() && !manifest.capabilities.iter().any(|capability| capability == "net") {
+            findings.push(Finding::warn("components", format!("component {} imports wasi:sockets; disclose net usage", dependency.describe())));
         }
         findings.push(Finding::warn("components", format!("component {} reaches {}", dependency.describe(), info.reach())));
     }

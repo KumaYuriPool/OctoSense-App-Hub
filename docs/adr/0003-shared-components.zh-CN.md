@@ -78,7 +78,7 @@ ADR 0014 让应用把普通的 Rust crate 作为 WebAssembly 组件放在应用�
 
 `hub component-check` 和发布组件时的签名目录准备运行同一套准入检查。出现以下情况时，它拒绝这个 Release：
 
-- 文件不是有效组件，或导入了 `wasi:cli`、`wasi:clocks`、`wasi:filesystem`、`wasi:http`、`wasi:io`、`wasi:random` 和 `octosense:host` 以外的任何内容，与应用自己的组件相同；
+- 文件不是有效组件，或导入了 `wasi:cli`、`wasi:clocks`、`wasi:filesystem`、`wasi:http`、`wasi:io`、`wasi:random`、`wasi:sockets` 和 `octosense:host` 以外的任何内容，与应用自己的组件相同；
 - 文件的 BLAKE3 摘要、大小、导入或导出与 Release 不一致；
 - ID 违反应用 ID 规则、以 `os.` 开头，或是签名目录中某个应用的 ID；
 - 版本不是单个确切的语义版本、已经发布过，或不高于记录中最新的版本；
@@ -86,6 +86,8 @@ ADR 0014 让应用把普通的 Rust crate 作为 WebAssembly 组件放在应用�
 - Release 没有 GitHub 来源证明，或证明验证失败。开发检查可以用 `--allow-unsigned` 接受未签名的 Release。
 
 更新必须来自与早期版本相同的仓库、所有者和工作流。审核人员还会看到组件能访问什么，例如：`org.example.markdown 1.0.0 is a component that reaches the clock, random numbers and files in its app folder, but no network or other app`。
+
+套接字导入现在使用可扩展的宿主 API 要求 `wasm.sockets@1`。固定这类组件的应用必须要求此 ABI，商店在安装前和启动时检查实际宿主支持。这不会新增使 RC5 拒绝整个目录的清单特性；当前规则见[共享组件发布规则](../PUBLISHING.zh-CN.md#共享组件)。RC5 不包含套接字支持。
 
 ### 4. 应用契约
 
