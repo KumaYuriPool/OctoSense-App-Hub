@@ -1093,6 +1093,32 @@ impl Widget for AppHubView {
 mod tests {
     use super::*;
     use makepad_app_module::AppModule;
+    use makepad_widgets::makepad_platform::makepad_network::{
+        EventSink, NetworkBackend, NetworkError, NetworkRuntime, WsSend,
+    };
+
+    /// Presentation tests supply their own responses. Record the request rather
+    /// than starting a detached native HTTPS worker that can outlive the test.
+    #[derive(Default)]
+    struct RecordingNetwork {
+        requests: Mutex<Vec<(LiveId, HttpRequest)>>,
+    }
+    impl NetworkBackend for RecordingNetwork {
+        fn http_start(&self, id: LiveId, request: HttpRequest, _: EventSink) -> Result<(), NetworkError> {
+            self.requests.lock().unwrap().push((id, request));
+            Ok(())
+        }
+        fn http_cancel(&self, _: LiveId) -> Result<(), NetworkError> { Ok(()) }
+        fn ws_open(&self, _: LiveId, _: HttpRequest, _: EventSink) -> Result<(), NetworkError> {
+            Err(NetworkError::Unsupported("presentation tests do not use WebSockets"))
+        }
+        fn ws_send(&self, _: LiveId, _: WsSend) -> Result<(), NetworkError> {
+            Err(NetworkError::Unsupported("presentation tests do not use WebSockets"))
+        }
+        fn ws_close(&self, _: LiveId) -> Result<(), NetworkError> {
+            Err(NetworkError::Unsupported("presentation tests do not use WebSockets"))
+        }
+    }
 
     #[test]
     fn completed_install_survives_closed_store_view() {
@@ -1115,6 +1141,8 @@ mod tests {
     #[test]
     fn native_module_and_all_presentation_states_evaluate() {
         let mut cx = Cx::new(Box::new(|_, _| {}));
+        let network = Arc::new(RecordingNetwork::default());
+        cx.net = Arc::new(NetworkRuntime::with_backend(network.clone()));
         cx.with_vm(makepad_widgets::script_mod);
         let vm_id = cx.alloc_splash_vm_with_network(false);
         let root = cx.with_script_vm_id_trusted(vm_id, |vm| {
@@ -1161,6 +1189,14 @@ mod tests {
                 "a recycled icon must not show old artwork"
             );
             let request_id = *view.svg_requests.keys().next().unwrap();
+            {
+                let requests = network.requests.lock().unwrap();
+                assert_eq!(requests.len(), 1, "one bounded SVG download is requested");
+                assert_eq!(requests[0].0, request_id);
+                assert_eq!(requests[0].1.url, remote_svg);
+                assert!(matches!(requests[0].1.method, HttpMethod::GET));
+                assert_eq!(requests[0].1.max_response_body_bytes, 1024 * 1024);
+            }
             view.receive_svg(
                 &mut cx,
                 &vec![NetworkResponse::HttpResponse {
@@ -1174,6 +1210,8 @@ mod tests {
                 }],
             );
             view.bind_image(&mut cx, artwork.clone(), Some(remote_svg));
+            assert!(view.svg_requests.is_empty(), "the simulated response completes the request");
+            assert_eq!(network.requests.lock().unwrap().len(), 1, "cached SVGs are not downloaded again");
             assert!(
                 artwork.has_content(),
                 "downloaded SVGs must use the vector parser"
