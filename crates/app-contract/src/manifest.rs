@@ -863,7 +863,8 @@ pub fn short_id(app_id: &str) -> &str {
 ///   checks this list against that file): `apphub`, `appcard`, `reference`,
 ///   `rinx`, `sheets`, `terminal`, and the Makepad apps it has made native
 ///   apps: `calculator`, `clock`, `notes`, `reminders`, `weather`, and the
-///   desktop-only `browser` and `task`. Their tools (`notes.search`,
+///   desktop-only `browser` and `task`; and `updater`, its host-owned
+///   Updates window, which has no tools. Their tools (`notes.search`,
 ///   `calculator.eval`, `browser.tabs`, …) are named by OctoSense's grants,
 ///   so no store app may declare them. A Makepad app is reserved here when
 ///   OctoSense makes it native, not before.
@@ -878,7 +879,8 @@ pub fn short_id(app_id: &str) -> &str {
 /// not by its name.
 pub const RESERVED_NAMES: &[&str] = &[
     "agents", "apphub", "appcard", "browser", "calculator", "card", "clock", "dev", "notes", "octos", "octoscode", "os",
-    "reference", "reminders", "rinx", "sheets", "shell", "system", "task", "terminal", "toolbox", "weather", "workflow",
+    "reference", "reminders", "rinx", "sheets", "shell", "system", "task", "terminal", "toolbox", "updater", "weather",
+    "workflow",
 ];
 
 /// Exact app ids which would collide with host-owned files beneath an install
