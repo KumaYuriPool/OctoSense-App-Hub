@@ -46,7 +46,7 @@ use makepad_widgets::{Cx, SplashRef};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 pub use octosense_app_policy::contract::host_api::{AgentAccess, HostApiMethod};
 
@@ -96,6 +96,8 @@ impl ServiceCall {
 pub struct Replier {
     heap_key: usize,
     req_id: u64,
+    /// A request's identity outlives reuse of either its heap or request id.
+    generation: Arc<()>,
 }
 
 /// An answer waiting for its isolate: heap, request, result, and when it
@@ -106,6 +108,7 @@ static REPLIES: Mutex<Vec<QueuedReply>> = Mutex::new(Vec::new());
 
 /// A request its service has not answered yet.
 struct Pending {
+    generation: Arc<()>,
     app_id: String,
     timeout: Duration,
     /// None while a sheet the service raised for it is up.
@@ -139,12 +142,13 @@ impl Replier {
     /// after the owning isolate closed. It is not permission to perform a write.
     pub fn is_pending(&self) -> bool {
         with_pending(|pending| pending.get(&(self.heap_key, self.req_id))
-            .is_some_and(|entry| entry.deadline.is_none_or(|deadline| deadline > Instant::now())))
+            .is_some_and(|entry| Arc::ptr_eq(&entry.generation, &self.generation)
+                && entry.deadline.is_none_or(|deadline| deadline > Instant::now())))
     }
     /// Answer the request. An answer after the request timed out, or after
     /// its isolate closed, or a second answer, goes nowhere.
     pub fn send(self, result: Result<Value, String>) {
-        if with_pending(|pending| pending.remove(&(self.heap_key, self.req_id))).is_none() {
+        if !self.is_pending() {
             return;
         }
         let result = result.map(|value| value.to_string()).and_then(|json| {
@@ -154,41 +158,48 @@ impl Replier {
                 Ok(json)
             }
         });
-        queue_reply(self.heap_key, self.req_id, result);
+        with_pending(|pending| {
+            let key = (self.heap_key, self.req_id);
+            if !pending.get(&key).is_some_and(|entry| Arc::ptr_eq(&entry.generation, &self.generation)) {
+                return;
+            }
+            pending.remove(&key);
+            // Queue under the same lock as completion. Otherwise cancel_heap
+            // can clear both queues between removal and this late answer.
+            queue_reply(self.heap_key, self.req_id, result);
+        });
     }
 }
 
 /// Start waiting for one request's answer, or refuse it when too many wait.
-fn track(heap_key: usize, req_id: u64, app_id: &str, timeout: Duration) -> Result<(), String> {
+fn track(heap_key: usize, req_id: u64, app_id: &str, timeout: Duration) -> Result<Replier, String> {
     start_sweeper();
     with_pending(|pending| {
         let mine = pending.keys().filter(|(heap, _)| *heap == heap_key).count();
         if mine >= MAX_PENDING_PER_ISOLATE || pending.len() >= MAX_PENDING {
             return Err("too many host requests are waiting; try again when some have answered".into());
         }
+        let generation = Arc::new(());
         let deadline = Some(Instant::now() + timeout);
-        pending.insert((heap_key, req_id), Pending { app_id: app_id.to_string(), timeout, deadline });
-        Ok(())
+        pending.insert((heap_key, req_id), Pending { generation: generation.clone(), app_id: app_id.to_string(), timeout, deadline });
+        Ok(Replier { heap_key, req_id, generation })
     })
 }
 
 /// Answer, with a timeout, every request of the matching isolates whose
 /// deadline passed by `now`.
 fn expire_pending(now: Instant, heaps: impl Fn(usize) -> bool) {
-    let expired: Vec<(usize, u64)> = with_pending(|pending| {
+    with_pending(|pending| {
         let keys: Vec<_> = pending
             .iter()
             .filter(|((heap, _), entry)| heaps(*heap) && entry.deadline.is_some_and(|deadline| deadline <= now))
             .map(|(key, _)| *key)
             .collect();
-        for key in &keys {
-            pending.remove(key);
+        for (heap_key, req_id) in keys {
+            pending.remove(&(heap_key, req_id));
+            queue_reply(heap_key, req_id, Err("the host service timed out".into()));
         }
-        keys
     });
-    for (heap_key, req_id) in expired {
-        queue_reply(heap_key, req_id, Err("the host service timed out".into()));
-    }
 }
 
 /// Drop answers of the matching isolates that nobody took within [`REPLY_TTL`].
@@ -331,12 +342,14 @@ pub fn dispatch(call: ServiceCall, heap_key: usize, req_id: u64, host: &mut dyn 
     let mut services = SERVICES.lock().unwrap();
     let service = services.iter().position(|s| s.family() == family);
     let timeout = service.map(|i| services[i].timeout(&call)).unwrap_or(DEFAULT_TIMEOUT);
-    if let Err(refusal) = track(heap_key, req_id, &call.app_id, timeout) {
-        drop(services);
-        queue_reply(heap_key, req_id, Err(refusal));
-        return;
-    }
-    let reply = Replier { heap_key, req_id };
+    let reply = match track(heap_key, req_id, &call.app_id, timeout) {
+        Ok(reply) => reply,
+        Err(refusal) => {
+            drop(services);
+            queue_reply(heap_key, req_id, Err(refusal));
+            return;
+        }
+    };
     if family == "runtime" {
         drop(services);
         crate::host_api::dispatch(call, reply);
@@ -390,8 +403,11 @@ struct SheetOps {
 impl ServiceHost for SheetOps {
     fn open_sheet(&mut self, body: String) {
         if !self.may_prompt {
-            Replier { heap_key: self.heap_key, req_id: self.req_id }
-                .send(Err("this surface cannot raise a prompt; open the app to continue".into()));
+            let reply = with_pending(|pending| pending.get(&(self.heap_key, self.req_id))
+                .map(|entry| Replier { heap_key: self.heap_key, req_id: self.req_id, generation: entry.generation.clone() }));
+            if let Some(reply) = reply {
+                reply.send(Err("this surface cannot raise a prompt; open the app to continue".into()));
+            }
             return;
         }
         hold_for_sheet(self.heap_key, self.req_id, &self.app_id);
@@ -741,6 +757,37 @@ mod tests {
         held.lock().unwrap().pop().unwrap().send(Ok(Value::Null));
         expire_pending(later(DEFAULT_TIMEOUT + Duration::from_secs(1)), |h| h == 7104);
         assert!(take_replies_for(&[7104]).is_empty(), "nothing reaches a replacement isolate");
+    }
+
+    #[test]
+    fn a_reused_heap_and_request_id_never_revive_an_old_replier() {
+        let held = holds("reused_request", None, false);
+        for (heap, ending) in [(7180, "close"), (7181, "timeout"), (7182, "answered")] {
+            dispatch(call("reused_request.read"), heap, 1, &mut Host::default());
+            let old = held.lock().unwrap().pop().unwrap();
+            assert!(old.is_pending());
+            match ending {
+                "close" => cancel_heap(heap),
+                "timeout" => expire_pending(later(DEFAULT_TIMEOUT + Duration::from_secs(1)), |h| h == heap),
+                _ => old.clone().send(Ok(Value::String("original".into()))),
+            }
+            take_replies_for(&[heap]);
+            assert!(!old.is_pending());
+
+            // A replacement isolate can reuse an address and restart request
+            // ids. A timed-out request id can also be retried in the same VM.
+            dispatch(call("reused_request.read"), heap, 1, &mut Host::default());
+            let current = held.lock().unwrap().pop().unwrap();
+            assert!(current.is_pending());
+            assert!(!old.is_pending(), "{ending}: the old invocation stays cancelled");
+            old.send(Ok(Value::String("stale".into())));
+            assert!(current.is_pending(), "an old response cannot remove the replacement's request");
+            assert!(take_replies_for(&[heap]).is_empty(), "no stale answer reaches the replacement");
+            current.send(Ok(Value::String("replacement".into())));
+            let answer = take_replies_for(&[heap]);
+            assert_eq!(answer.len(), 1);
+            assert_eq!(answer[0].2.as_ref().unwrap(), "\"replacement\"");
+        }
     }
 
     /// A service that keeps state per isolate hears each closing isolate's
