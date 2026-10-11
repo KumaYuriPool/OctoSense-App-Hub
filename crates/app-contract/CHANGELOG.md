@@ -12,6 +12,8 @@ that holds 1.2.0.
 
 ## 1.12.0 — unreleased
 
+- `RESERVED_NAMES` gains `updater`: OctoSense's native Updates window. No
+  store app may take `updater` as its id or namespace.
 - Add the optional `window` manifest field (`WindowHint { width, height }`,
   with `WindowHint::new`): the size, in points, at which the app prefers its
   desktop window to open. It is a hint, not a grant: hosts clamp it to the
