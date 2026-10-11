@@ -160,7 +160,8 @@ impl Replier {
         });
         with_pending(|pending| {
             let key = (self.heap_key, self.req_id);
-            if !pending.get(&key).is_some_and(|entry| Arc::ptr_eq(&entry.generation, &self.generation)) {
+            if !pending.get(&key).is_some_and(|entry| Arc::ptr_eq(&entry.generation, &self.generation)
+                && entry.deadline.is_none_or(|deadline| deadline > Instant::now())) {
                 return;
             }
             pending.remove(&key);
