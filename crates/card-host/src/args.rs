@@ -32,8 +32,9 @@ Options:
   --static <prefix>=<dir>  Serve <dir>'s files at <prefix>/... from memory.
                            Repeatable.
   --size <w>x<h>           The window's inner size in layout points, e.g.
-                           390x844. Default: 412x892. card-studio renders a
-                           card at several sizes with it.
+                           390x844. Default: the manifest's window size,
+                           else 412x892. card-studio renders a card at
+                           several sizes with it.
   -h, --help               Print this and exit.
 
 Every L0 card logs one `card-host: realize {json}` line: the lint result

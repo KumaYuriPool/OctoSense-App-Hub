@@ -77,6 +77,17 @@ fn load_statics(mounts: &[(String, PathBuf)]) -> octosense_app_policy::StaticAss
     Box::leak(out.into_boxed_slice())
 }
 
+/// The size the bundle's manifest asks its window to open at (`window`, in
+/// points), which a run without `--size` uses. card-host is a render target,
+/// so it does not clamp the hint to the screen, just as it does not clamp
+/// `--size`. A manifest that does not parse sizes nothing: it is refused,
+/// with its reason, in the default window.
+fn manifest_window(bundle: &Path) -> Option<(f64, f64)> {
+    let text = std::fs::read_to_string(bundle.join(octosense_app_policy::MANIFEST_FILE)).ok()?;
+    let window = octosense_app_policy::AppManifest::parse(&text).ok()?.window?;
+    Some((f64::from(window.width), f64::from(window.height)))
+}
+
 /// Admit the bundle and resolve what it gets. Refusals are fatal: a card that
 /// cannot be admitted must not be drawn, not even partially.
 fn policy_for(args: &Args) -> Result<AppPolicy, String> {
@@ -323,15 +334,20 @@ impl App {
             error!("card-host: started without its arguments");
             return;
         };
-        if let Some((w, h)) = args.size {
-            // A sized window is a render target (card-studio): the card gets
-            // the whole inner size, so the caption bar goes.
+        let manifest_size = if args.size.is_none() { manifest_window(&args.bundle) } else { None };
+        if let Some((w, h)) = args.size.or(manifest_size) {
+            // A sized window is a render target (card-studio, App Flow's
+            // captures at a design's size): the card gets the whole inner
+            // size, so the caption bar goes.
             let mut window = self.ui.widget(cx, ids!(main_window));
             script_apply_eval!(cx, window, { show_caption_bar: false });
             let size = dvec2(w, h);
             self.ui.window(cx, ids!(main_window)).configure_window(cx, size, dvec2(40.0, 40.0), false, "Card host".into());
             self.ui.window(cx, ids!(main_window)).resize(cx, size);
             log!("card-host: window sized {w}x{h}");
+            if manifest_size.is_some() {
+                log!("card-host: the size is the manifest's window; --size overrides it");
+            }
         }
         let policy = match policy_for(args) {
             Ok(policy) => policy,
@@ -493,6 +509,24 @@ mod tests {
             assert_eq!(std::fs::read(&path).unwrap(), before);
             std::fs::remove_dir_all(dir).unwrap();
         }
+    }
+
+    #[test]
+    fn without_size_the_window_opens_at_the_manifests_hint() {
+        let dir = std::env::temp_dir().join(format!("card-host-window-hint-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("manifest.json");
+        let manifest = |extra: &str| {
+            format!(r#"{{"schema":1,"id":"example.window","version":"1.0.0","name":"Fixture","integrity":{{"bundle_blake3":""}}{extra}}}"#)
+        };
+        std::fs::write(&path, manifest(r#","schema_minor":1,"window":{"width":1536,"height":1024}"#)).unwrap();
+        assert_eq!(manifest_window(&dir), Some((1536.0, 1024.0)));
+        // No hint, or a manifest the contract refuses: the default window.
+        std::fs::write(&path, manifest("")).unwrap();
+        assert_eq!(manifest_window(&dir), None);
+        std::fs::write(&path, manifest(r#","window":{"width":1536,"height":1024}"#)).unwrap();
+        assert_eq!(manifest_window(&dir), None);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

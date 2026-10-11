@@ -152,9 +152,9 @@ Within `1.x` the contract only grows (ADR 0005 section 2):
   2. Every `requires` entry must be in `KNOWN_FEATURES`, at every
      `schema_minor`. Otherwise: `app <id> needs a newer host: <feature>`.
      `1.0.0` knows no features.
-  3. If `schema_minor` (default 0) is at most `SCHEMA_MINOR` (0 in every
-     release so far), `parse` reads the manifest strictly and refuses it if
-     any level has an unknown field.
+  3. If `schema_minor` (default 0) is at most `SCHEMA_MINOR` (0 before
+     1.12.0; 1 from 1.12.0, which adds the optional `window`), `parse` reads
+     the manifest strictly and refuses it if any level has an unknown field.
   4. If `schema_minor` is above `SCHEMA_MINOR`, the manifest was written for
      a newer `1.x`. Rule 2 has passed, so every unknown field, at any level,
      is optional: `parse` ignores it, and `AppManifest::ignored_fields()`
@@ -167,6 +167,10 @@ Within `1.x` the contract only grows (ADR 0005 section 2):
 
   An older host therefore never runs an app under weaker rules than its
   author wrote, and a newer optional field never breaks an older host.
+  That holds only when the manifest declares the minor that added the
+  field. `window`, the first field added at a new minor, needs
+  `"schema_minor": 1`, and `parse` refuses it in a manifest that declares
+  less.
   Ignored fields stay in the manifest's signing bytes, so a newer signed
   manifest still verifies. A field added in `1.x` must be omitted from
   serialization when it holds its default, and must serialize exactly as

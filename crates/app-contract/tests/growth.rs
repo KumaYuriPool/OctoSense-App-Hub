@@ -12,10 +12,19 @@ fn manifest_with(body: &str) -> String {
     )
 }
 
+/// A `schema_minor` newer than this build's: what a manifest written for a
+/// later 1.x says. Relative, so the lenient-path tests keep testing the
+/// lenient path when this build's minor moves on.
+fn newer_minor() -> u32 {
+    SCHEMA_MINOR + 1
+}
+
 #[test]
 fn palpo_extension_preserves_schema_and_declares_its_host_feature() {
     assert_eq!(SCHEMA, 1);
-    assert_eq!(SCHEMA_MINOR, 0);
+    // 1 since 1.12.0, which added the optional `window` hint; Palpo's
+    // operations (1.2.0) left it at 0.
+    assert_eq!(SCHEMA_MINOR, 1);
     assert_eq!(
         KNOWN_FEATURES,
         &[
@@ -318,6 +327,11 @@ fn unknown_fields_are_still_refused() {
     assert!(err.contains("unknown field"), "{err}");
     let err = parse(&manifest_with(r#""schema_minor":0,"network":{"hosts":[],"proxy":"x"}"#)).unwrap_err();
     assert!(err.contains("unknown field `proxy`"), "{err}");
+    // Minor 1 is this build's own minor now: no longer read leniently.
+    let err = parse(&manifest_with(r#""schema_minor":1,"sandbox":"off""#)).unwrap_err();
+    assert!(err.contains("unknown field `sandbox`"), "{err}");
+    let err = parse(&manifest_with(r#""schema_minor":1,"window":{"width":800,"height":600,"x":0}"#)).unwrap_err();
+    assert!(err.contains("unknown field `x`"), "{err}");
 }
 
 #[test]
@@ -333,7 +347,8 @@ fn the_new_fields_do_not_change_an_older_manifests_signing_bytes() {
 
 #[test]
 fn a_newer_minor_ignores_an_unknown_optional_field_and_reports_it() {
-    let manifest = parse(&manifest_with(r#""schema_minor":1,"capabilities":["storage"],"theme_color":"slate""#)).unwrap();
+    let minor = newer_minor();
+    let manifest = parse(&manifest_with(&format!(r#""schema_minor":{minor},"capabilities":["storage"],"theme_color":"slate""#))).unwrap();
     assert_eq!(manifest.ignored_fields(), ["theme_color"]);
     assert_eq!(manifest.capabilities, ["storage"]);
     let limits = HostLimits::default().with_require_signature(false);
@@ -391,20 +406,135 @@ fn a_newer_minor_ignores_unknown_fields_at_every_level() {
 fn a_newer_minor_still_refuses_what_it_knows_to_be_wrong() {
     // Ignoring is for unknown fields only: a known field with a bad value,
     // a foreign schema and the old research shape are refused as before.
-    let err = parse(&manifest_with(r#""schema_minor":1,"storage":{"agent_workspace":"everything"}"#)).unwrap_err();
+    let minor = newer_minor();
+    let err = parse(&manifest_with(&format!(r#""schema_minor":{minor},"storage":{{"agent_workspace":"everything"}}"#))).unwrap_err();
     assert!(err.contains("manifest is not valid"), "{err}");
-    let err = parse(&manifest_with(r#""schema_minor":1,"x":1"#).replace(r#""schema":1"#, r#""schema":2"#)).unwrap_err();
+    let err = parse(&manifest_with(&format!(r#""schema_minor":{minor},"x":1"#)).replace(r#""schema":1"#, r#""schema":2"#)).unwrap_err();
     assert!(err.contains("manifest is not valid"), "{err}");
-    let err = parse(&manifest_with(r#""schema_minor":1,"capabilities":["research"],"research":{"languages":["en"]}"#)).unwrap_err();
+    let err = parse(&manifest_with(&format!(
+        r#""schema_minor":{minor},"capabilities":["research"],"research":{{"languages":["en"]}}"#
+    )))
+    .unwrap_err();
     assert!(err.contains("old toolbox shape"), "{err}");
+    // So is a window out of range.
+    let err = parse(&manifest_with(&format!(r#""schema_minor":{minor},"window":{{"width":100,"height":600}}"#))).unwrap_err();
+    assert_eq!(err, "window width must be 320 to 4096 points, not 100");
 }
 
 #[test]
 fn a_newer_manifest_signs_with_the_fields_it_was_signed_with() {
-    let manifest = parse(&manifest_with(r#""schema_minor":1,"theme_color":"blue","network":{"hosts":[],"retry":2}"#)).unwrap();
+    let minor = newer_minor();
+    let manifest =
+        parse(&manifest_with(&format!(r#""schema_minor":{minor},"theme_color":"blue","network":{{"hosts":[],"retry":2}}"#))).unwrap();
     let bytes = String::from_utf8(manifest.signing_bytes().unwrap()).unwrap();
     assert!(bytes.contains(r#""theme_color":"blue""#), "{bytes}");
     assert!(bytes.contains(r#""network":{"hosts":[],"retry":2}"#), "{bytes}");
+}
+
+// ---- the window hint (schema_minor 1, contract 1.12.0) -------------------
+
+/// The signing bytes of `manifest_with(r#""capabilities":["storage"]"#)`, as
+/// every contract before 1.12.0 computed them.
+const PLAIN_SIGNING_BYTES: &str = r#"{"agent":null,"capabilities":["storage"],"compute":{"instruction_budget":null,"memory_bytes":null},"id":"forecast","integrity":{"bundle_blake3":"00","signature":null},"name":"Forecast","network":{"hosts":[]},"schema":1,"storage":{"max_bytes":null},"version":"1.0.0"}"#;
+
+#[test]
+fn a_window_hint_parses_at_schema_minor_1_and_grants_nothing() {
+    let manifest =
+        parse(&manifest_with(r#""schema_minor":1,"capabilities":["storage"],"window":{"width":1536,"height":1024}"#)).unwrap();
+    assert_eq!(manifest.window, Some(WindowHint::new(1536, 1024)));
+    assert!(manifest.ignored_fields().is_empty());
+    // It serialises exactly as written, and its signing bytes carry it.
+    let json = serde_json::to_value(&manifest).unwrap();
+    assert_eq!(json["window"], serde_json::json!({"width": 1536, "height": 1024}));
+    let bytes = String::from_utf8(manifest.signing_bytes().unwrap()).unwrap();
+    assert!(bytes.contains(r#""schema_minor":1"#) && bytes.contains(r#""window":{"height":1024,"width":1536}"#), "{bytes}");
+    // A hint, not a grant: the policy is the one the same manifest without
+    // it resolves to.
+    let limits = HostLimits::default().with_require_signature(false);
+    let plain = parse(&manifest_with(r#""capabilities":["storage"]"#)).unwrap();
+    assert_eq!(resolve(&manifest, &limits).unwrap(), resolve(&plain, &limits).unwrap());
+    let system = HostLimits::system();
+    assert_eq!(resolve(&manifest, &system).unwrap(), resolve(&plain, &system).unwrap());
+}
+
+#[test]
+fn a_manifest_without_a_window_parses_and_signs_as_before() {
+    let manifest = parse(&manifest_with(r#""capabilities":["storage"]"#)).unwrap();
+    assert_eq!(manifest.window, None);
+    let json = serde_json::to_string(&manifest).unwrap();
+    assert!(!json.contains("window"), "{json}");
+    assert_eq!(String::from_utf8(manifest.signing_bytes().unwrap()).unwrap(), PLAIN_SIGNING_BYTES);
+    // Declaring this build's minor without using window changes only the
+    // schema_minor key.
+    let minor = parse(&manifest_with(r#""schema_minor":1,"capabilities":["storage"]"#)).unwrap();
+    assert_eq!(minor.window, None);
+    let bytes = String::from_utf8(minor.signing_bytes().unwrap()).unwrap();
+    assert_eq!(bytes.replace(r#","schema_minor":1"#, ""), PLAIN_SIGNING_BYTES);
+}
+
+#[test]
+fn a_window_hint_needs_schema_minor_1() {
+    let expected = r#"window requires "schema_minor": 1 or later, so that hosts which predate window ignore it instead of refusing the app"#;
+    for minor in ["", r#""schema_minor":0,"#] {
+        let err = parse(&manifest_with(&format!(r#"{minor}"window":{{"width":1536,"height":1024}}"#))).unwrap_err();
+        assert_eq!(err, expected, "{minor:?}");
+    }
+    // resolve checks it too, for a manifest that did not come through parse.
+    let unparsed: AppManifest = serde_json::from_str(&manifest_with(r#""window":{"width":1536,"height":1024}"#)).unwrap();
+    assert_eq!(resolve(&unparsed, &HostLimits::system()).unwrap_err(), expected);
+}
+
+#[test]
+fn a_window_hint_is_held_to_its_range() {
+    let at = |width: i64, height: i64| {
+        parse(&manifest_with(&format!(r#""schema_minor":1,"window":{{"width":{width},"height":{height}}}"#)))
+    };
+    for (width, height) in [(320, 240), (4096, 4096), (1536, 1024), (320, 4096), (4096, 240)] {
+        assert_eq!(at(width, height).unwrap().window, Some(WindowHint::new(width as u32, height as u32)));
+    }
+    for (width, height, expected) in [
+        (319, 600, "window width must be 320 to 4096 points, not 319"),
+        (4097, 600, "window width must be 320 to 4096 points, not 4097"),
+        (0, 600, "window width must be 320 to 4096 points, not 0"),
+        (800, 239, "window height must be 240 to 4096 points, not 239"),
+        (800, 4097, "window height must be 240 to 4096 points, not 4097"),
+    ] {
+        assert_eq!(at(width, height).unwrap_err(), expected, "{width}x{height}");
+    }
+    // Not a size at all: refused by the parser like any malformed field.
+    for (window, why) in [
+        (r#"{"width":800}"#, "missing field `height`"),
+        (r#"{"height":600}"#, "missing field `width`"),
+        (r#"{"width":800,"width":900,"height":600}"#, "duplicate field `width`"),
+        (r#"{"width":-1,"height":600}"#, "invalid value"),
+        (r#"{"width":800.5,"height":600}"#, "invalid type: floating point"),
+        (r#"{"width":1536.0,"height":1024}"#, "invalid type: floating point"),
+        (r#"{"width":4294967296,"height":600}"#, "invalid value"),
+        (r#"{"width":"800","height":600}"#, "invalid type: string"),
+        // Only an object: an array would sign as an object, not as written.
+        (r#"[800,600]"#, "invalid type: sequence"),
+        (r#""800x600""#, "invalid type: string"),
+    ] {
+        let err = parse(&manifest_with(&format!(r#""schema_minor":1,"window":{window}"#))).unwrap_err();
+        assert!(err.starts_with("manifest is not valid") && err.contains(why), "{window}: {err}");
+    }
+}
+
+#[test]
+fn a_newer_minor_reads_the_window_and_still_ignores_what_it_does_not_know() {
+    // A manifest written for a later 1.x: window is known and checked, the
+    // rest is ignored, listed, and kept in the signing bytes.
+    let minor = newer_minor();
+    let manifest = parse(&manifest_with(&format!(
+        r#""schema_minor":{minor},"capabilities":["storage"],"theme_color":"slate",
+           "window":{{"width":1536,"height":1024,"maximized":true}},"storage":{{"backup":"never"}}"#
+    )))
+    .unwrap();
+    assert_eq!(manifest.window, Some(WindowHint::new(1536, 1024)));
+    assert_eq!(manifest.ignored_fields(), ["storage.backup", "theme_color", "window.maximized"]);
+    let bytes = String::from_utf8(manifest.signing_bytes().unwrap()).unwrap();
+    assert!(bytes.contains(r#""window":{"height":1024,"maximized":true,"width":1536}"#), "{bytes}");
+    assert!(bytes.contains(r#""theme_color":"slate""#), "{bytes}");
 }
 
 #[test]
