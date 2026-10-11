@@ -105,7 +105,7 @@ the problem and the usage, and exits 2. Neither opens a window.
 | `--stamp` | Rewrite the manifest's `integrity.bundle_blake3` to match the directory before admitting. Without it, `card-host` refuses a bundle whose bytes changed since the last `hub stamp`. |
 | `--system` | Admit the bundle as a system app: by digest only, under the system ceilings. An empty digest is filled in memory. Use it to develop a system app. |
 | `--static <prefix>=<dir>` | Serve `<dir>`'s files at `<prefix>/...` from memory, as a shell serves a system app's compiled-in artwork. Photos uses `--static photos=<dir>`. Repeatable. |
-| `--size <w>x<h>` | The window's inner size in layout points, with no caption bar, so the card gets exactly that viewport. Default: `412x892`. `card-studio` starts one `card-host` per size with it. |
+| `--size <w>x<h>` | The window's inner size in layout points, with no caption bar, so the card gets exactly that viewport. Default: the manifest's [`window`](PUBLISHING.md#the-window-size) size when it has one, sized the same way and not clamped to the screen; otherwise `412x892`. `card-studio` starts one `card-host` per size with it. |
 | `--remote [<port>]` | Start the localhost HTTP control surface ([below](#drive-it-over-http-makepad_remote)) on `<port>`. Without a port, `card-host` picks a free one and logs it. `MAKEPAD_REMOTE=<port>` is equivalent to `--remote <port>`. |
 
 The log says what happened:
@@ -113,6 +113,7 @@ The log says what happened:
 | Log line | Meaning |
 | --- | --- |
 | `card-host: <id> <version> admitted — capabilities {…}, hosts {…}, storage <n> bytes, agent <profile>` | The bundle was admitted; the log shows usage declarations and resolved resource limits, not user consent. |
+| `card-host: window sized <w>x<h>` | The window was sized by `--size`, or by the manifest's `window`, which the next line then says. |
 | `card-host: refused: <reason>` | The bundle was refused. The window shows "card-host refused this bundle" and the reason. None of the bundle's code runs. |
 | `card-host: realize {json}` | An L0 card's lint and realize report, logged before the card is drawn. A script app logs none. |
 | `card-host: the card did not lower: <error>` | The card was admitted but could not be lowered to widgets. |

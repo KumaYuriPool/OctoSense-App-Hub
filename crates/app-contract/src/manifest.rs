@@ -18,11 +18,19 @@ use std::collections::BTreeMap;
 pub const SCHEMA: u32 = 1;
 
 /// The newest `schema_minor` this build knows: which additions to schema 1
-/// it understands. `0` is the grammar of `1.0.0`. A manifest may carry a
+/// it understands. `0` is the grammar of `1.0.0`; `1` adds
+/// [`AppManifest::window`] (contract `1.12.0`). A manifest may carry a
 /// higher `schema_minor` (it records what the manifest uses, and asks for
 /// nothing by itself); what a host must understand is listed in
 /// [`AppManifest::requires`].
-pub const SCHEMA_MINOR: u32 = 0;
+pub const SCHEMA_MINOR: u32 = 1;
+
+/// The first `schema_minor` that knows [`AppManifest::window`].
+const WINDOW_SCHEMA_MINOR: u32 = 1;
+
+/// The widths and heights, in points, a [`WindowHint`] may ask for.
+const WINDOW_WIDTHS: std::ops::RangeInclusive<u32> = 320..=4096;
+const WINDOW_HEIGHTS: std::ops::RangeInclusive<u32> = 240..=4096;
 
 /// The features a manifest may list in [`AppManifest::requires`] and this
 /// build honours. Empty in `1.0.0`: every feature added in `1.x` that
@@ -332,6 +340,16 @@ pub struct AppManifest {
     /// exactly as it did.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub components: Vec<ComponentDependency>,
+    /// The size the app prefers its desktop window to open at, in points
+    /// ([`WindowHint`]). A hint, not a grant: hosts clamp it to the screen,
+    /// phones and other full-screen hosts ignore it, and the person can
+    /// still resize the window. An optional field in the growth rule's
+    /// sense, so it needs `schema_minor` 1 or later: a host that predates
+    /// it then reads the manifest leniently and ignores the hint instead of
+    /// refusing an unknown field. Skipped when absent, so a manifest written
+    /// before it existed signs exactly as it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<WindowHint>,
     /// Features added in `1.x` that this manifest needs a host to honour,
     /// because they restrict or change what the app gets. A host that does
     /// not know one ([`KNOWN_FEATURES`]) refuses the app rather than run it
@@ -560,6 +578,70 @@ pub fn is_exact_version(version: &str) -> bool {
         None => true,
     };
     parts.len() == 3 && parts.iter().all(|p| numeric(p)) && pre_ok && build_ok
+}
+
+/// The size an app prefers its desktop window to open at, in points
+/// ([`AppManifest::window`], `schema_minor` 1): `{"width": 1536, "height":
+/// 1024}`.
+///
+/// A hint, not a grant. It asks for no capability, storage or budget, and
+/// a host owes the app nothing for it: hosts clamp it to the screen, phones
+/// and other full-screen hosts ignore it, and the person can still resize
+/// the window. [`parse`] refuses a width outside 320 to 4096 or a height
+/// outside 240 to 4096.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct WindowHint {
+    /// Points, 320 to 4096.
+    pub width: u32,
+    /// Points, 240 to 4096.
+    pub height: u32,
+}
+
+impl WindowHint {
+    /// A hint of `width` by `height` points. [`parse`] checks the range; this
+    /// does not.
+    pub fn new(width: u32, height: u32) -> Self {
+        WindowHint { width, height }
+    }
+}
+
+/// What a derived, `deny_unknown_fields` `Deserialize` does, except that only
+/// an object is a window: serde would also read `[1536, 1024]` as one, which
+/// then serialises, and signs, as an object rather than as written.
+impl<'de> Deserialize<'de> for WindowHint {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::{Error, MapAccess, Visitor};
+        const FIELDS: &[&str] = &["width", "height"];
+        struct Object;
+        impl<'de> Visitor<'de> for Object {
+            type Value = WindowHint;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str(r#"an object {"width": <points>, "height": <points>}"#)
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<WindowHint, A::Error> {
+                let (mut width, mut height) = (None, None);
+                while let Some(key) = map.next_key::<String>()? {
+                    let (slot, name) = match key.as_str() {
+                        "width" => (&mut width, "width"),
+                        "height" => (&mut height, "height"),
+                        other => return Err(A::Error::unknown_field(other, FIELDS)),
+                    };
+                    if slot.is_some() {
+                        return Err(A::Error::duplicate_field(name));
+                    }
+                    *slot = Some(map.next_value::<u32>()?);
+                }
+                Ok(WindowHint {
+                    width: width.ok_or_else(|| A::Error::missing_field("width"))?,
+                    height: height.ok_or_else(|| A::Error::missing_field("height"))?,
+                })
+            }
+        }
+        // Named as a struct, so a manifest for a newer 1.x has a later
+        // field inside `window` ignored and listed like any other.
+        deserializer.deserialize_struct("WindowHint", FIELDS, Object)
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -838,6 +920,11 @@ impl AppManifest {
     ///   level: by the growth rule they are optional, because a field that
     ///   restricts or changes what the app gets must be named in `requires`.
     ///   The ignored fields are reported by [`AppManifest::ignored_fields`].
+    /// - Known fields are checked as always, at every `schema_minor`
+    ///   ([`AppManifest::check_requires`]). A manifest that sets `window`,
+    ///   which `schema_minor` 1 added, is refused at `schema_minor` 0: a
+    ///   host that predates `window` must read it leniently and ignore the
+    ///   hint, never refuse it as an unknown field.
     pub fn parse(json: &str) -> Result<Self, String> {
         let manifest = match serde_json::from_str::<AppManifest>(json) {
             Ok(manifest) => manifest,
@@ -904,7 +991,9 @@ impl AppManifest {
 
     /// Refuse a manifest that requires a feature this build does not know:
     /// running it would give the app less containment, or something other,
-    /// than its author declared.
+    /// than its author declared. Also refuse a known field its rules refuse:
+    /// `integrity.github`, `host_api`, `backend` and `components` without
+    /// their feature, or `window` below `schema_minor` 1 or out of range.
     pub fn check_requires(&self) -> Result<(), String> {
         let github_required = self.requires.iter().any(|f| f == "publisher-github-v1");
         if github_required != self.integrity.github.is_some() {
@@ -930,6 +1019,7 @@ impl AppManifest {
             backend.validate()?;
         }
         self.check_components()?;
+        self.check_window()?;
         let unknown: Vec<&str> =
             self.requires.iter().map(String::as_str).filter(|feature| !KNOWN_FEATURES.contains(feature)).collect();
         if unknown.is_empty() {
@@ -957,6 +1047,36 @@ impl AppManifest {
             if !aliases.insert(component.alias.as_str()) {
                 return Err(format!("component name {:?} is used twice", component.alias));
             }
+        }
+        Ok(())
+    }
+
+    /// The `window` rules: the field arrived with `schema_minor` 1, so a
+    /// manifest that sets it must say so (an older host then ignores the
+    /// hint instead of refusing an unknown field), and each side must be in
+    /// range. The hint grants nothing, so nothing else is checked.
+    fn check_window(&self) -> Result<(), String> {
+        let Some(window) = &self.window else { return Ok(()) };
+        if self.schema_minor < WINDOW_SCHEMA_MINOR {
+            return Err(format!(
+                "window requires \"schema_minor\": {WINDOW_SCHEMA_MINOR} or later, so that hosts which predate window ignore it instead of refusing the app"
+            ));
+        }
+        if !WINDOW_WIDTHS.contains(&window.width) {
+            return Err(format!(
+                "window width must be {} to {} points, not {}",
+                WINDOW_WIDTHS.start(),
+                WINDOW_WIDTHS.end(),
+                window.width
+            ));
+        }
+        if !WINDOW_HEIGHTS.contains(&window.height) {
+            return Err(format!(
+                "window height must be {} to {} points, not {}",
+                WINDOW_HEIGHTS.start(),
+                WINDOW_HEIGHTS.end(),
+                window.height
+            ));
         }
         Ok(())
     }

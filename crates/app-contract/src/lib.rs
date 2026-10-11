@@ -68,9 +68,9 @@
 //!      `schema_minor`; otherwise the app is refused with
 //!      `app <id> needs a newer host: <feature>`. `1.0.0` knows none.
 //!   3. A manifest whose `schema_minor` (default 0) is at most
-//!      [`SCHEMA_MINOR`] (`0` in `1.0.0`) is read strictly: an unknown
-//!      field at any level refuses it, exactly as before `requires`
-//!      existed.
+//!      [`SCHEMA_MINOR`] (`0` in `1.0.0`, `1` since `1.12.0`, which added
+//!      `window`) is read strictly: an unknown field at any level refuses
+//!      it, exactly as before `requires` existed.
 //!   4. A manifest whose `schema_minor` is above [`SCHEMA_MINOR`] was
 //!      written for a newer `1.x`. Its unknown fields, at any level
 //!      (top level, `network`, `storage`, `agent`, `agent.model`, …), are
@@ -80,7 +80,9 @@
 //!      the old toolbox shape is still refused.
 //!
 //!   So an older host never runs an app under weaker rules than its author
-//!   wrote, and a newer optional field never breaks an older host. The
+//!   wrote, and a newer optional field never breaks an older host, as long
+//!   as the manifest declares the minor that added the field: `window`, the
+//!   first field added at a new minor, is refused below `schema_minor` 1. The
 //!   ignored fields stay part of the manifest's signing bytes, so a newer
 //!   manifest's signature still verifies; a field added in `1.x` must
 //!   therefore be skipped when serialising its default and must serialise
@@ -109,7 +111,7 @@ pub use entry::{script_source, ASSETS_PLACEHOLDER, SCRIPT_ENTRY};
 pub use manifest::{
     check_component_id, check_reserved_id, is_exact_version, parse, short_id, AgentSpec, AgentWorkspace, AppManifest, ComponentDependency,
     Compute, GithubPublisher, Integrity, ModelNeed, ModelSpec, ModelTier, Network, ProfileMode, Signature, Storage, TaskModel, Triggers,
-    KNOWN_CAPABILITIES, KNOWN_FEATURES, KNOWN_MODEL_NEEDS, MAX_COMPONENTS, RESERVED_HOST_FILE_IDS, RESERVED_NAMES, SCHEMA, SCHEMA_MINOR,
+    WindowHint, KNOWN_CAPABILITIES, KNOWN_FEATURES, KNOWN_MODEL_NEEDS, MAX_COMPONENTS, RESERVED_HOST_FILE_IDS, RESERVED_NAMES, SCHEMA, SCHEMA_MINOR,
 };
 pub use policy::{resolve, AppPolicy, HostLimits, StorageGrant};
 pub use research::ResearchScope;

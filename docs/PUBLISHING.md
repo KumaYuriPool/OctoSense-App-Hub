@@ -673,7 +673,8 @@ Validate its exact build, platform and released bytes separately.
 | `components` | The shared components the app's functions use, each pinned to one exact version and digest. | Optional; needs `wasm-shared-components-v1`; at most 8 ([Shared components](#shared-components)). |
 | `host_api` | The host API methods the app needs (`required`) or can use (`optional`), each with its ABI major version. | Optional; needs `host-api-v1` in `requires`. The store checks the `required` methods at install and at every launch ([Declare what the app needs](HOST-API.md#declare-what-the-app-needs)). |
 | `backend` | The app's own backend: its public sign-in endpoints and the operations the app may call. | Optional; needs `backend-api-v1` in `requires` and `storage.accounts: true`. Holds no credentials ([Sign in to your own backend](#sign-in-to-your-own-backend)). |
-| `schema_minor` | Which additions to schema 1 the manifest uses. | Leave it out. |
+| `window` | The size the app prefers its desktop window to open at, in points: `{"width": 1536, "height": 1024}`. | Optional; needs `"schema_minor": 1`; width 320 to 4096, height 240 to 4096. A hint that grants nothing ([The window size](#the-window-size)). |
+| `schema_minor` | Which additions to schema 1 the manifest uses. | Leave it out, unless the manifest sets `window`: then `1`. |
 
 Any other field is refused. After `hub publisher-prepare`, the manifest also
 holds `null` for optional fields you left out, such as `"agent": null`. They
@@ -880,6 +881,48 @@ The store shows the scope in plain words. For `research` with
 `{"langs":["en","zh"],"categories":["news"],"max_age_days":7}`, the store's
 privacy summary ([The listing](#the-listing)) says "Searches news in English
 and Chinese, from the last 7 days".
+
+### The window size
+
+`window` asks a desktop host to open the app's window at a size, in points:
+
+```json
+{
+  "schema_minor": 1,
+  "window": { "width": 1536, "height": 1024 }
+}
+```
+
+| Field | Rule |
+| --- | --- |
+| `width` | 320 to 4096. |
+| `height` | 240 to 4096. |
+
+The parser refuses a size out of range, and refuses `window` in a manifest
+without `"schema_minor": 1`:
+
+```text
+window requires "schema_minor": 1 or later, so that hosts which predate window ignore it instead of refusing the app
+```
+
+`window` is a hint, not a grant. It changes no capability, quota or review,
+and the store does not show it.
+
+- A desktop host that reads it opens the app's window at that size, clamped
+  to its screen. The person can still resize the window.
+- Phones and other full-screen hosts ignore it.
+- `card-host` opens at that size when `--size` is not given. It is a render
+  target, so it does not clamp the size to the screen
+  ([Run a bundle locally](DEVELOPMENT.md#run-a-bundle-locally-card-host)).
+- A host built on a contract before 1.12.0 knows only `schema_minor` 0. It
+  reads a manifest with `"schema_minor": 1` leniently: it ignores `window`,
+  lists it in `AppManifest::ignored_fields()` and opens the app at its own
+  default size. Without `"schema_minor": 1`, that host would refuse `window`
+  as an unknown field.
+
+Without `window`, a host opens the app at its own default size.
+
+Source: `WindowHint` in `crates/app-contract/src/manifest.rs`.
 
 ## The app's agent and tools
 

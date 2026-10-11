@@ -10,6 +10,26 @@ versions' changes, and 1.10.0 includes 1.9.0's changes.
 [README.md](README.md#versions-on-cratesio) shows how to update a lock file
 that holds 1.2.0.
 
+## 1.12.0 — unreleased
+
+- Add the optional `window` manifest field (`WindowHint { width, height }`,
+  with `WindowHint::new`): the size, in points, at which the app prefers its
+  desktop window to open. It is a hint, not a grant: hosts clamp it to the
+  screen, phones and other full-screen hosts ignore it, and the person can
+  still resize the window. `AppPolicy` is unchanged by it.
+- `SCHEMA_MINOR` is now 1, the first bump. A manifest that sets `window`
+  must declare `"schema_minor": 1` or later; `parse` and `resolve` refuse it
+  otherwise. A host on an earlier contract then reads such a manifest
+  leniently: it ignores `window`, lists it in `ignored_fields()`, and
+  computes the same signing bytes, instead of refusing an unknown field.
+- `parse` refuses a width outside 320 to 4096, a height outside 240 to
+  4096, and a `window` that is not an object of those two integers. The
+  field is skipped when absent, so existing manifests and their signing
+  bytes do not change.
+- A manifest with `"schema_minor": 1` is now read strictly, like any
+  manifest at this build's minor: an unknown field in it is refused rather
+  than ignored. Manifests for later minors are still read leniently.
+
 ## 1.11.0 — 2026-10-10
 
 Published through the [release workflow](https://github.com/OctoSense-org/OctoSense-App-Hub/actions/runs/38026012863)

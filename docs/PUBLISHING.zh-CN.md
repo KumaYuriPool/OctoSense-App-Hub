@@ -497,7 +497,8 @@ hub: the bundle was refused
 | `components` | 应用的函数所用的共享组件，每个都固定到一个确切版本和摘要。 | 可选；需要 `wasm-shared-components-v1`；最多 8 个（[共享组件](#共享组件)）。 |
 | `host_api` | 应用需要（`required`）或可以使用（`optional`）的宿主 API 方法，每个方法都写明 ABI 主版本。 | 可选；须在 `requires` 中声明 `host-api-v1`。商店在安装时和每次启动时检查 `required` 中的方法（[声明应用需要什么](HOST-API.zh-CN.md#声明应用需要什么)）。 |
 | `backend` | 应用自己的后端：公开的登录端点，以及应用可以调用的操作。 | 可选；须在 `requires` 中声明 `backend-api-v1`，并设置 `storage.accounts: true`。不含任何凭据（[登录自己的后端](#登录自己的后端)）。 |
-| `schema_minor` | 清单用到了 schema 1 的哪些新增内容。 | 省略此字段。 |
+| `window` | 应用希望桌面窗口打开时的尺寸，单位为点：`{"width": 1536, "height": 1024}`。 | 可选；需要 `"schema_minor": 1`；宽度 320 到 4096，高度 240 到 4096。只是提示，不授予任何权限（[窗口尺寸](#窗口尺寸)）。 |
+| `schema_minor` | 清单用到了 schema 1 的哪些新增内容。 | 省略此字段；但清单设置了 `window` 时，须写 `1`。 |
 
 其他字段一律拒绝。运行 `hub publisher-prepare` 之后，你省略的可选字段也会出现在清单中，值为 `null`，例如 `"agent": null`。这些字段不改变任何行为。
 
@@ -660,6 +661,39 @@ ID 请以你能控制的反向域名前缀开头，例如把自己的域名倒�
 列表为空或省略，或者省略 `max_age_days`，都表示不设限制。`{}` 只保留默认值：每次搜索 20 条结果，不抓取。未知字段一律拒绝。
 
 商店会用通俗的话展示这个范围。例如，`research` 的范围为 `{"langs":["en","zh"],"categories":["news"],"max_age_days":7}` 时，商店的隐私概要（[商店信息](#商店信息)）显示“Searches news in English and Chinese, from the last 7 days”。
+
+### 窗口尺寸
+
+`window` 请求桌面宿主以指定尺寸打开应用窗口，单位为点：
+
+```json
+{
+  "schema_minor": 1,
+  "window": { "width": 1536, "height": 1024 }
+}
+```
+
+| 字段 | 规则 |
+| --- | --- |
+| `width` | 320 到 4096。 |
+| `height` | 240 到 4096。 |
+
+尺寸超出范围时，解析器会拒绝清单；清单没有写 `"schema_minor": 1` 却设置了 `window` 时，也会被拒绝：
+
+```text
+window requires "schema_minor": 1 or later, so that hosts which predate window ignore it instead of refusing the app
+```
+
+`window` 只是提示，不是授权。它不改变任何能力、配额或审核，商店也不显示它。
+
+- 读取它的桌面宿主按这个尺寸打开应用窗口，并限制在屏幕范围以内。用户仍然可以调整窗口大小。
+- 手机和其他全屏宿主忽略它。
+- 不加 `--size` 时，`card-host` 按这个尺寸打开窗口。它是渲染目标，所以不会把尺寸限制在屏幕范围以内（[在本地运行应用包](DEVELOPMENT.zh-CN.md#在本地运行应用包card-host)）。
+- 基于 1.12.0 之前的契约构建的宿主只认识 `schema_minor` 0。它以宽松方式读取写有 `"schema_minor": 1` 的清单：忽略 `window`，把它列入 `AppManifest::ignored_fields()`，并按自己的默认尺寸打开应用。清单如果没有写 `"schema_minor": 1`，这样的宿主会把 `window` 当作未知字段拒绝。
+
+没有 `window` 时，宿主按自己的默认尺寸打开应用。
+
+源码：`crates/app-contract/src/manifest.rs` 中的 `WindowHint`。
 
 ## 应用的 Agent 与工具
 

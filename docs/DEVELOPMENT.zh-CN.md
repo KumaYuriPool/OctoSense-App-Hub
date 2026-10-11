@@ -75,7 +75,7 @@ card-host --help
 | `--stamp` | 在准入之前重写清单的 `integrity.bundle_blake3`，使其与目录一致。不加这个参数时，如果应用包的字节在上次 `hub stamp` 之后有变化，`card-host` 会拒绝它。 |
 | `--system` | 按系统应用的方式准入：只校验摘要，适用系统上限。空摘要会在内存中补齐。用于开发系统应用。 |
 | `--static <prefix>=<dir>` | 把 `<dir>` 中的文件读入内存，在 `<prefix>/...` 路径下提供，与 Shell 提供系统应用内置素材的方式相同。相册使用 `--static photos=<dir>`。可重复使用。 |
-| `--size <w>x<h>` | 窗口的内部尺寸（布局点），不带标题栏，使卡片正好获得这个视口。默认：`412x892`。`card-studio` 用它为每个尺寸各启动一个 `card-host`。 |
+| `--size <w>x<h>` | 窗口的内部尺寸（布局点），不带标题栏，使卡片正好获得这个视口。默认：清单设有 [`window`](PUBLISHING.zh-CN.md#窗口尺寸) 时取它的尺寸，处理方式相同，也不受屏幕大小限制；否则为 `412x892`。`card-studio` 用它为每个尺寸各启动一个 `card-host`。 |
 | `--remote [<port>]` | 在 `<port>` 上启动 localhost HTTP 控制接口（见 [下文](#通过-http-驱动makepad_remote)）。不指定端口时，`card-host` 会自选一个空闲端口并记录在日志中。`MAKEPAD_REMOTE=<port>` 与 `--remote <port>` 等效。 |
 
 从日志可以看出运行结果：
@@ -83,6 +83,7 @@ card-host --help
 | 日志行 | 含义 |
 | --- | --- |
 | `card-host: <id> <version> admitted — capabilities {…}, hosts {…}, storage <n> bytes, agent <profile>` | 应用包已准入；日志列出用途声明和解析后的资源上限，不代表用户同意。 |
+| `card-host: window sized <w>x<h>` | 窗口尺寸来自 `--size`，或来自清单的 `window`；后一种情况下，下一行会说明。 |
 | `card-host: refused: <reason>` | `card-host` 拒绝了这个应用包。窗口显示“card-host refused this bundle”和原因，应用包中的任何代码都不会运行。 |
 | `card-host: realize {json}` | L0 卡片的 lint 和 realize 报告，在绘制卡片之前记录。脚本应用没有这一行。 |
 | `card-host: the card did not lower: <error>` | 卡片已准入，但无法转换为控件。 |
