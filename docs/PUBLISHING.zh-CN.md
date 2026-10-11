@@ -107,8 +107,8 @@ my-app/
 | `publisher-signature` | 声明的 GitHub 证明验证失败（即使加了 `--allow-unsigned`）；清单未签名，且没有加 `--allow-unsigned`；或者旧格式的 Ed25519 签名验证失败，或指向未知的密钥（`publisher key "<id>" is not registered with this hub`）。 | 清单未签名，且加了 `--allow-unsigned`。 |
 | `identity` | ID 以 `os.` 开头；ID 本身或其最后一段是保留名称（[ID 与保留名称](#id-与保留名称)）。 | |
 | `contents` | 文件的扩展名不是 `.card`、`.json`、`.l0`、`.octoscript`、`.splash`、`.svg`、`.png`、`.jpg`、`.jpeg`、`.webp`、`.ttf`、`.otf`、`.txt` 或 `.md` 之一，也不是函数模块（`.wasm`，见 `functions`）。准入检查同样拒绝没有扩展名的文件（例如 `.DS_Store` 和 `LICENSE`）。 | |
-| `functions` | 应用包的 `fns/` 中带了 8 个以上的 `.wasm` 文件。既不在 `fns/<name>.wasm`（名称为 `[a-z0-9_-]`，最多 64 个字符），也不在 `components/<blake3>.wasm`（以自己的摘要命名，见 `components`）的 `.wasm` 文件，或既不是 WebAssembly 核心模块（版本 1 的 8 字节文件头）也不是有效组件的文件，以 `contents-invalid` 拒绝；导入了 `wasi:cli`、`wasi:clocks`、`wasi:filesystem`、`wasi:http`、`wasi:io`、`wasi:random` 和 `octosense:host` 以外任何内容的组件也是如此。清单没有在 `requires` 中声明 `wasm-components-v1` 时，组件在这一项被拒绝（[WebAssembly 组件](#webassembly-组件)）。除此之外，准入检查不检查核心模块内部；宿主在加载模块时检查它的导入和导出。 | 应用声明了 `wasm`，却没有带 `fns/*.wasm`，也没有指定共享组件。清单声明了 `wasm-components-v1`，`fns/` 中却没有组件。每个准入的组件都有一行说明它能访问什么。随包函数未披露 `wasm`，或组件导入文件/HTTP 接口却未披露 `storage`/`net` 时，只产生警告，不会拒绝。 |
-| `components` | 清单指定的某个共享组件不在 `--catalog` 给出的签名目录中、已在其中被撤回或摘要不同，或导入了宿主不支持的接口。商店应用的应用包在 `components/` 中带有 `.wasm` 文件。系统应用的应用包（`--system-app`）缺少它固定的某个组件的 `components/<blake3>.wasm`，或带有它没有固定的组件（[共享组件](#共享组件)）。 | 每个解析成功的组件都有一行说明它能访问什么。不使用 `--catalog` 时，每个组件都会被报告为未解析。清单声明了 `wasm-shared-components-v1`，却没有指定任何组件。 |
+| `functions` | 应用包的 `fns/` 中带了 8 个以上的 `.wasm` 文件。既不在 `fns/<name>.wasm`（名称为 `[a-z0-9_-]`，最多 64 个字符），也不在 `components/<blake3>.wasm`（以自己的摘要命名，见 `components`）的 `.wasm` 文件，或既不是 WebAssembly 核心模块（版本 1 的 8 字节文件头）也不是有效组件的文件，以 `contents-invalid` 拒绝；导入了 `wasi:cli`、`wasi:clocks`、`wasi:filesystem`、`wasi:http`、`wasi:io`、`wasi:random`、`wasi:sockets` 和 `octosense:host` 以外任何内容的组件也是如此。清单没有在 `requires` 中声明 `wasm-components-v1`，或导入套接字却未要求 `wasm.sockets@1` 时，组件在这一项被拒绝（[WebAssembly 组件](#webassembly-组件)）。除此之外，准入检查不检查核心模块内部；宿主在加载模块时检查它的导入和导出。 | 应用声明了 `wasm`，却没有带 `fns/*.wasm`，也没有指定共享组件。清单声明了 `wasm-components-v1`，`fns/` 中却没有组件。每个准入的组件都有一行说明它能访问什么。随包函数未披露 `wasm`，或组件导入文件/HTTP/套接字接口却未披露 `storage`/`net` 时，只产生警告，不会拒绝。 |
+| `components` | 清单指定的某个共享组件不在 `--catalog` 给出的签名目录中、已在其中被撤回或摘要不同，或导入了宿主不支持的接口，或应用遗漏套接字组件所需的 `wasm.sockets@1` ABI。商店应用的应用包在 `components/` 中带有 `.wasm` 文件。系统应用的应用包（`--system-app`）缺少它固定的某个组件的 `components/<blake3>.wasm`，或带有它没有固定的组件（[共享组件](#共享组件)）。 | 每个解析成功的组件都有一行说明它能访问什么。不使用 `--catalog` 时，每个组件都会被报告为未解析。清单声明了 `wasm-shared-components-v1`，却没有指定任何组件。 |
 | `contents-invalid`（文本和图片） | 文本文件（`.splash`、`.card`、`.json`、`.l0`、`.octoscript`、`.txt` 或 `.md`）超过 1 MiB 或不是 UTF-8；JSON 无法解析；PNG、JPEG 或 WebP 无法解码，或单边超过 4096 像素；商店信息中的图标不是正方形，或者是超过 1 MiB 或单边超过 1024 像素的位图。 | |
 | `contents-invalid`（SVG） | SVG 无法解析；既没有数值形式的 `width` 和 `height`，也没有 `viewBox`；单边超过 4096 像素；或含有脚本、`foreignObject` 或 `on…` 事件属性。SVG 的样式（`style` 属性或 `<style>` 块）导入样式表、使用转义或注释，或让 `url()` 指向同一文件内 `#fragment` 以外的任何位置。 | |
 | `entry` | 应用包中既没有 `main.splash` 也没有 `page.card`；`page.card` 不是有效的 L0；`page.data.json` 不是 JSON；应用包中既没有 `kit/native/<theme>/kit.json`，卡片所需的 OctoScript kit 模块也不齐全。 | |
@@ -167,10 +167,20 @@ Label{text: "Hello" draw_text.text_style: TextStyle{font_family: FontFamily{lati
 准入检查在以下条件都满足时接受组件：
 
 - 清单在 `requires` 中要求 `wasm-components-v1` ABI；`wasm` 只是使用披露。`wasm` 服务只能加载核心模块的宿主不认识这个特性，因此会拒绝这个应用，而不是等到第一次调用时才失败；
-- 组件能通过验证，且只从 `wasi:cli`、`wasi:clocks`、`wasi:filesystem`、`wasi:http`、`wasi:io`、`wasi:random` 和 `octosense:host` 导入接口。组件自己定义的类型（例如某个函数返回的记录）不算导入。`wasi:sockets` 及其他任何导入都以 `contents-invalid` 拒绝；
+- 组件能通过验证，且只从 `wasi:cli`、`wasi:clocks`、`wasi:filesystem`、`wasi:http`、`wasi:io`、`wasi:random`、`wasi:sockets` 和 `octosense:host` 导入接口。组件自己定义的类型（例如某个函数返回的记录）不算导入。其他包的导入以 `contents-invalid` 拒绝；
 - 组件可以导入 `wasi:filesystem`，但只能访问本应用带配额的独立存储。按 ADR 0014，宿主只给它应用自己的存储文件夹；
-- 组件可以导入 `wasi:http`；`net` 用于披露网络用途。不要求 `network.hosts`：按 OctoSense 2026 年 10 月 8 日的裁定，应用的网络声明在安装时展示，运行时不强制，因此组件可以访问任何主机；
+- `wasi:http` 使用宿主支持的网络传输。`wasi:sockets` 导入（普通 TCP、UDP 和 DNS，并非需要特权的原始 IP 套接字）还要求 `host_api.required: {"wasm.sockets": 1}` 以及 `requires: ["host-api-v1"]`；`net` 和 `network.hosts` 用于披露用途，不是运行时目的地白名单；
 - `octosense:host` 以所属应用的身份路由，保留实际同意、账户和共享检查；组件不能打开前台授权面板。
+
+套接字准入是**尚未发布的源码支持**，桌面 RC5 不支持。保留组件特性，并添加已有的可扩展宿主 API 声明：
+
+```json
+"requires": ["wasm-components-v1", "host-api-v1"],
+"host_api": {"required": {"wasm.sockets": 1}},
+"capabilities": ["wasm", "net"]
+```
+
+即使导入列表只有 DNS 或套接字类型接口，也必须声明这项要求。可选声明或不同 ABI 版本不能满足要求。没有 `wasm.sockets@1` 的宿主仍能读取签名目录，但会在安装前拒绝这个应用，并在启动时再次检查。不要为套接字新增 `requires` 特性：RC5 会拒绝包含未知特性的整个目录。套接字配额、调用超时、取消和清理由宿主负责；声明不会授予系统权限。运行套接字代码前，请查询实际宿主的运行时清单。
 
 组件遵守与模块相同的名称和大小规则，并计入 8 个函数文件的上限。每个准入的组件都有一条警告，告诉审核人员它能访问什么：
 
@@ -292,7 +302,7 @@ $ hub component-info fns/notes.wasm
 
 一个应用最多指定 8 个组件。没有该特性却写了 `components`（`components requires wasm-shared-components-v1`），或某个条目违反上述规则时，清单解析器会拒绝。不认识该特性的宿主会拒绝这个应用。只使用共享组件的应用不需要 `fns/`。
 
-使用 `--catalog` 时，准入检查在该签名目录中解析每个组件。组件缺失（`is not in the catalog`）、已被撤回（`was withdrawn: <reason>`）或摘要不同（`pins blake3 …, but the catalog's file hashes to …`）时，`components` 检查项会拒绝这个应用。遗漏 `storage`、`net` 或 `wasm` 使用声明不会导致组件被拒绝。`octosense:host` 不需要单独的授权。随后，每个组件都有一行说明它在这个应用中能访问什么。不使用 `--catalog` 时，准入检查会警告它无法解析这些组件。
+使用 `--catalog` 时，准入检查在该签名目录中解析每个组件。组件缺失（`is not in the catalog`）、已被撤回（`was withdrawn: <reason>`）或摘要不同（`pins blake3 …, but the catalog's file hashes to …`）时，`components` 检查项会拒绝这个应用。遗漏 `storage`、`net` 或 `wasm` 使用声明不会导致组件被拒绝。与随包组件相同，导入 `wasi:sockets` 的组件要求应用在 `host_api.required` 中包含 `"wasm.sockets": 1`，并在 `requires` 中包含 `host-api-v1`。准入检查根据目录中审核过的导入列表检查此要求。商店在下载或复用缓存组件前检查它，并在下载前及每次启动时检查宿主 API 是否可用。随后，每个组件都有一行说明它在这个应用中能访问什么。不使用 `--catalog` 时，准入检查会警告它无法解析这些组件。
 
 下面的演练在本地开发 Hub 上运行（见[用开发 Hub 演练](#用开发-hub-演练)）。它的签名目录提供 `org.example.markdown` 1.0.0，即 App Hub 测试中的 notes 组件（`crates/app-hub/tests/fixtures/notes.component.wasm`）。应用 `writer` 固定了它，并披露 `wasm` 和 `storage` 用途：
 
@@ -415,7 +425,7 @@ hub: the component was refused
 | `component` | 上面两个表中的某个字段违反了规则，或 Release 的导入或导出与文件不一致。 |
 | `digest` | 文件的 BLAKE3 摘要或大小与 Release 不一致。 |
 | `size` | 文件超过 8 MiB。 |
-| `contents-invalid` | 文件不是有效组件，或导入了 `wasi:cli`、`wasi:clocks`、`wasi:filesystem`、`wasi:http`、`wasi:io`、`wasi:random` 和 `octosense:host` 以外的任何内容。 |
+| `contents-invalid` | 文件不是有效组件，或导入了 `wasi:cli`、`wasi:clocks`、`wasi:filesystem`、`wasi:http`、`wasi:io`、`wasi:random`、`wasi:sockets` 和 `octosense:host` 以外的任何内容。 |
 | `publisher-signature` | Release 没有 GitHub 来源证明（使用 `--allow-unsigned` 时为警告），或证明验证失败。 |
 | `identity`（使用 `--catalog` 时） | 签名目录中有应用使用了这个组件的 ID。 |
 | `version`（使用 `--catalog` 时） | 签名目录中已有这个版本。 |

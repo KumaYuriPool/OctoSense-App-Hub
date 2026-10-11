@@ -73,14 +73,10 @@ fn the_gate_refuses_a_file_that_is_not_the_release() {
     edited.component.imports.pop();
     let report = check_component(&edited, NOTES, false, None).unwrap();
     assert_eq!(refusals(&report.findings, "component"), ["the release's imports or exports are not the file's; prepare the release again from this file"]);
-    // A truncated file, and one that imports sockets.
+    // A truncated file.
     let truncated = &NOTES[..NOTES.len() / 2];
     let report = check_component(&notes, truncated, false, None).unwrap();
     assert!(refusals(&report.findings, "contents-invalid")[0].contains("not a valid WebAssembly component"), "{}", report.render());
-    let draft: components::ComponentDraft = serde_json::from_value(draft_json("org.example.netprobe", "1.0.0")).unwrap();
-    let err = components::ComponentRelease::from_draft(draft, NETPROBE).unwrap_err();
-    assert!(err.starts_with("the component imports wasi:sockets/"), "{err}");
-    assert!(err.ends_with("may import only wasi:cli, wasi:clocks, wasi:filesystem, wasi:http, wasi:io, wasi:random and octosense:host"), "{err}");
     // A core module is no component.
     let module: &[u8] = b"\0asm\x01\0\0\0";
     let draft: components::ComponentDraft = serde_json::from_value(draft_json("org.example.m", "1.0.0")).unwrap();
@@ -368,4 +364,40 @@ fn a_signed_catalog_records_components_beside_apps_and_refuses_contradictions() 
     catalog.components[0].component.wasm_blake3 = blake3_hex(FETCH);
     assert!(verify_catalog(&catalog, &hub.anchor.public_hex()).is_err());
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_shared_socket_component_propagates_its_abi_to_the_app() {
+    let hub = Hub::new();
+    let sockets = component_entry("org.example.netprobe", "1.0.0", NETPROBE);
+    let catalog = resolving(&hub, vec![sockets.clone()]);
+    let mut f = Fixture::new();
+    f.pin(&[dependency("network", &sockets)], &[], &[]);
+    let report = f.report(Some(&catalog));
+    assert!(refusals(&report.findings, "components").iter().any(|detail| detail.contains("requires host_api.required wasm.sockets@1")), "{}", report.render());
+    f.socket_api();
+    let report = f.report(Some(&catalog));
+    assert!(report.passed(), "{}", report.render());
+    assert!(warnings(&report.findings, "components").iter().any(|detail| detail.contains("imports wasi:sockets; disclose net usage")));
+    assert!(warnings(&report.findings, "components").iter().any(|detail| detail.contains("reaches") && detail.contains("the network")));
+}
+
+#[test]
+fn a_system_bundle_socket_component_requires_the_same_host_abi() {
+    let sockets = component_entry("org.example.netprobe", "1.0.0", NETPROBE);
+    let mut f = Fixture::new();
+    f.manifest.id = "os.networkdemo".into();
+    bundled_file(&f, NETPROBE);
+    f.pin(&[dependency("network", &sockets)], &[], &[]);
+    let system = |f: &mut Fixture| {
+        f.manifest.integrity.signature = None;
+        f.manifest.integrity.bundle_blake3 = octosense_app_policy::digest_dir(&f.bundle).unwrap();
+        f.write_manifest();
+        gate::check_system_bundle(&f.bundle, &RefuseAllSignatures).unwrap()
+    };
+    let report = system(&mut f);
+    assert!(refusals(&report.findings, "components").iter().any(|detail| detail.contains("requires host_api.required wasm.sockets@1")), "{}", report.render());
+    f.socket_api();
+    let report = system(&mut f);
+    assert!(report.passed(), "{}", report.render());
 }

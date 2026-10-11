@@ -465,13 +465,13 @@ impl Store {
         // And against the key the catalog records, whatever the caller passed.
         let staged_json = serde_json::to_string(&staged_manifest).map_err(|e| e.to_string())?;
         let policy = octosense_app_policy::admit_and_resolve_dir(&staged_json, &digest, &self.limits, &self.publisher_keys())?;
+        entry.manifest.check_host_apis(&self.host_api_versions)?;
         // Its shared components resolve from this catalog and are already
         // in the store, verified: the installer keeps them first
         // ([`Store::install_components`]), so an app never lands without them.
         self.verified_components(&entry.manifest)?;
 
         let target = self.install_dir(app_id);
-        entry.manifest.check_host_apis(&self.host_api_versions)?;
         if target.exists() {
             std::fs::remove_dir_all(&target).map_err(|e| format!("cannot replace the installed app: {e}"))?;
         }
@@ -513,7 +513,7 @@ impl Store {
 
     /// Resolve `manifest`'s components against the verified catalog: each
     /// must be there at its exact version, offered, with the pinned digest,
-    /// and the app must grant what it imports.
+    /// and the app must declare each imported host ABI.
     pub fn resolve_components(&self, manifest: &octosense_app_policy::AppManifest) -> Result<Vec<&ComponentEntry>, String> {
         if manifest.components.is_empty() {
             return Ok(Vec::new());
@@ -524,7 +524,7 @@ impl Store {
             .iter()
             .map(|dependency| {
                 let entry = crate::components::resolve(catalog, dependency)?;
-                if let Some(missing) = crate::components::missing_grant(manifest, &crate::components::info_of(&entry.component)) {
+                if let Some(missing) = crate::components::info_of(&entry.component).missing_host_api(manifest) {
                     return Err(format!("component {} {missing}", dependency.describe()));
                 }
                 Ok(entry)
@@ -543,6 +543,9 @@ impl Store {
         manifest: &octosense_app_policy::AppManifest,
         fetch: &mut dyn FnMut(&ComponentEntry) -> Result<Vec<u8>, String>,
     ) -> Result<Vec<Resolved>, String> {
+        // Check before downloading: a catalog can contain apps requiring a
+        // newer network ABI while remaining readable by older hosts.
+        manifest.check_host_apis(&self.host_api_versions)?;
         for entry in self.resolve_components(manifest)? {
             let digest = &entry.component.wasm_blake3;
             if crate::components::verify_file(&crate::components::stored_path(&self.components_root, digest), digest).is_ok() {

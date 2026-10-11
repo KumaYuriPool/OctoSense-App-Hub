@@ -551,18 +551,36 @@ fn a_component_may_call_its_apps_host_services_with_no_grant_of_its_own() {
 }
 
 #[test]
-fn a_component_that_imports_sockets_or_does_not_validate_is_refused() {
+fn socket_components_require_the_host_abi_but_not_network_disclosures() {
     let report = with_component(true, &["wasm", "storage"], NETPROBE);
-    let finding = refusal(&report, "contents-invalid").unwrap_or_else(|| panic!("{}", report.render()));
-    assert!(finding.detail.contains("imports wasi:sockets/"), "{}", finding.detail);
-    assert_eq!(finding.path.as_deref(), Some("fns/notes.wasm"));
-    // No reach line claims "no network" for it, and it still counts as a
-    // component.
-    assert!(
-        !report.findings.iter().any(|f| f.detail.contains("is a component that reaches") || f.detail.contains("holds no component")),
-        "{}",
-        report.render()
-    );
+    let finding = refusal(&report, "functions").unwrap_or_else(|| panic!("{}", report.render()));
+    assert!(finding.detail.contains("requires host_api.required wasm.sockets@1"), "{}", finding.detail);
+    assert!(refusal(&report, "contents-invalid").is_none(), "{}", report.render());
+
+    let mut f = Fixture::new();
+    fs::create_dir_all(f.bundle.join("fns")).unwrap();
+    fs::write(f.bundle.join("fns/network.wasm"), NETPROBE).unwrap();
+    f.manifest.requires.push("wasm-components-v1".into());
+    f.socket_api();
+    let report = f.report(None);
+    assert!(report.passed(), "{}", report.render());
+    assert!(report.findings.iter().any(|f| f.detail.contains("imports wasi:sockets; disclose net usage")));
+    assert!(report.findings.iter().any(|f| f.detail.contains("is a component that reaches") && f.detail.contains("the network")));
+    assert!(f.manifest.capabilities.is_empty(), "usage declarations are not grants");
+
+    // Optional or another ABI version cannot disguise a required socket import.
+    f.manifest.host_api.as_mut().unwrap().required.insert("wasm.sockets".into(), 2);
+    f.sign();
+    assert!(!f.report(None).passed());
+    let api = f.manifest.host_api.as_mut().unwrap();
+    api.required.clear();
+    api.optional.insert("wasm.sockets".into(), 1);
+    f.sign();
+    assert!(!f.report(None).passed());
+}
+
+#[test]
+fn a_component_that_does_not_validate_is_refused() {
     let truncated = &NOTES[..NOTES.len() / 2];
     let report = with_component(true, &["wasm", "storage"], truncated);
     let finding = refusal(&report, "contents-invalid").unwrap_or_else(|| panic!("{}", report.render()));

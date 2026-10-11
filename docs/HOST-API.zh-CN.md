@@ -67,6 +67,10 @@ ABI 与导入验证、确切摘要、发布者证明、目录撤回、配额和�
 
 ## 查询宿主实现了什么
 
+### WASI 套接字（尚未发布）
+
+导入 `wasi:sockets` 的组件要求在 `host_api.required` 中声明 `wasm.sockets@1`，并在 `requires` 中使用已有的 `host-api-v1` 特性。这是运行时 ABI 标记，不是 `host.request` 方法；TCP、UDP 和 DNS 操作使用标准 WASI 接口。RC5 能读取此要求但不能满足，因此只拒绝安装这个应用，不会使整个目录失效。应用固定共享套接字组件时也有相同要求。准入和声明规则见 [WebAssembly 组件](PUBLISHING.zh-CN.md#webassembly-组件)。请在实际宿主中确认运行时及平台支持；本次源码变更不会更新已发布的二进制。
+
 ### 原生日历（契约 1.10）
 
 新增 `device_calendar` 能力与 `calendar`（系统日历应用自己的存储）和 `gcalendar`（Google 连接器）互相独立，不会隐含授予它们或操作系统权限。需要原生日程的应用应声明 `device_calendar`、`host-api-v1`，并设置 `host_api.required: {"device_calendar.events.list": 1}`，以及完整流程需要的其他方法。缺少这些方法的宿主会拒绝安装。

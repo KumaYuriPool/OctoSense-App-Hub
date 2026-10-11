@@ -142,8 +142,8 @@ admission. A warning does not.
 | `publisher-signature` | The declared GitHub proof fails verification, even with `--allow-unsigned`; the manifest is unsigned and `--allow-unsigned` is absent; or a legacy Ed25519 signature fails verification or names an unknown key (`publisher key "<id>" is not registered with this hub`). | The manifest is unsigned and `--allow-unsigned` is given. |
 | `identity` | The id starts with `os.`; the id, or its last segment, is a reserved name ([Ids and reserved names](#ids-and-reserved-names)). | |
 | `contents` | A file's extension is not one of `.card`, `.json`, `.l0`, `.octoscript`, `.splash`, `.svg`, `.png`, `.jpg`, `.jpeg`, `.webp`, `.ttf`, `.otf`, `.txt` or `.md`, and it is not a function module (`.wasm`, see `functions`). Files with no extension, such as `.DS_Store` and `LICENSE`, are refused too. | |
-| `functions` | The bundle carries more than 8 `.wasm` files in `fns/`. A `.wasm` file that is not at `fns/<name>.wasm` (the name `[a-z0-9_-]`, at most 64 characters) or `components/<blake3>.wasm` (named by its own digest, see `components`), or is neither a WebAssembly core module (the 8-byte header of version 1) nor a valid component, is refused as `contents-invalid`, as is a component that imports anything outside `wasi:cli`, `wasi:clocks`, `wasi:filesystem`, `wasi:http`, `wasi:io`, `wasi:random` and `octosense:host`. A component is refused here when the manifest does not require `wasm-components-v1` ([WebAssembly components](#webassembly-components)). The gate checks nothing else inside a core module; the host checks its imports and exports when it loads the module. | The app declares `wasm` but carries no `fns/*.wasm` and names no shared component. The manifest requires `wasm-components-v1` but `fns/` holds no component. Each admitted component gets a line saying what it reaches. Bundled functions without a `wasm` disclosure, or component file/HTTP imports without `storage`/`net` disclosures, produce warnings, not refusals. |
-| `components` | A shared component the manifest names is missing from the `--catalog` catalog, withdrawn there or has another digest, or its imports are unsupported. A store app's bundle carries a `.wasm` file in `components/`. A system app's bundle (`--system-app`) lacks `components/<blake3>.wasm` for a component it pins, or carries one it does not pin ([Shared components](#shared-components)). | Each resolved component gets a line saying what it reaches. Without `--catalog`, each component is reported as not resolved. The manifest requires `wasm-shared-components-v1` but names no components. |
+| `functions` | The bundle carries more than 8 `.wasm` files in `fns/`. A `.wasm` file that is not at `fns/<name>.wasm` (the name `[a-z0-9_-]`, at most 64 characters) or `components/<blake3>.wasm` (named by its own digest, see `components`), or is neither a WebAssembly core module (the 8-byte header of version 1) nor a valid component, is refused as `contents-invalid`, as is a component that imports anything outside `wasi:cli`, `wasi:clocks`, `wasi:filesystem`, `wasi:http`, `wasi:io`, `wasi:random`, `wasi:sockets` and `octosense:host`. A component is refused here when the manifest does not require `wasm-components-v1`, or imports sockets without required `wasm.sockets@1` ([WebAssembly components](#webassembly-components)). The gate checks nothing else inside a core module; the host checks its imports and exports when it loads the module. | The app declares `wasm` but carries no `fns/*.wasm` and names no shared component. The manifest requires `wasm-components-v1` but `fns/` holds no component. Each admitted component gets a line saying what it reaches. Bundled functions without a `wasm` disclosure, or component file/HTTP/socket imports without `storage`/`net` disclosures, produce warnings, not refusals. |
+| `components` | A shared component the manifest names is missing from the `--catalog` catalog, withdrawn there or has another digest, its imports are unsupported, or the app omits the required `wasm.sockets@1` ABI for a socket component. A store app's bundle carries a `.wasm` file in `components/`. A system app's bundle (`--system-app`) lacks `components/<blake3>.wasm` for a component it pins, or carries one it does not pin ([Shared components](#shared-components)). | Each resolved component gets a line saying what it reaches. Without `--catalog`, each component is reported as not resolved. The manifest requires `wasm-shared-components-v1` but names no components. |
 | `contents-invalid` (text and images) | A text file (`.splash`, `.card`, `.json`, `.l0`, `.octoscript`, `.txt` or `.md`) is over 1 MiB or not UTF-8; JSON does not parse; a PNG, JPEG or WebP does not decode or is over 4096 px a side; the listing icon is not square, or is a bitmap over 1 MiB or 1024 px a side. | |
 | `contents-invalid` (SVG) | An SVG does not parse; lacks a numeric `width` and `height` or a `viewBox`; is over 4096 px a side; or holds a script, a `foreignObject` or an `on…` handler. Its styling (a `style` attribute or a `<style>` block) imports a stylesheet, uses an escape, uses a comment or points `url()` anywhere but a `#fragment` in the same file. | |
 | `entry` | The bundle has neither `main.splash` nor `page.card`; `page.card` is not valid L0; `page.data.json` is not JSON; neither `kit/native/<theme>/kit.json` nor every OctoScript kit module the card needs is in the bundle. | |
@@ -243,15 +243,35 @@ The gate admits a component when:
 - the manifest requires `wasm-components-v1`. A host that does not implement
   that ABI refuses the app before launch;
 - it validates and imports interfaces only from `wasi:cli`, `wasi:clocks`,
-  `wasi:filesystem`, `wasi:http`, `wasi:io`, `wasi:random` and
+  `wasi:filesystem`, `wasi:http`, `wasi:io`, `wasi:random`, `wasi:sockets` and
   `octosense:host`. A type the component defines, such as a record one of its
-  functions returns, does not count as an import. `wasi:sockets` and anything
-  else are refused as `contents-invalid`;
+  functions returns, does not count as an import. Other packages are refused
+  as `contents-invalid`;
 - `wasi:filesystem` stays in the app's own storage jail and quota;
-- `wasi:http` uses the host's supported network transport. `net` and
-  `network.hosts` describe usage, not a runtime allowlist;
+- `wasi:http` uses the host's supported network transport. `wasi:sockets`
+  imports (ordinary TCP, UDP and DNS, not privileged raw IP sockets) additionally
+  require `host_api.required: {"wasm.sockets": 1}` and `requires: ["host-api-v1"]`;
+  `net` and `network.hosts` describe usage, not a runtime allowlist;
 - `octosense:host` routes as the owning app with actual consent, account and
   sharing checks. It cannot raise a foreground approval from a component.
+
+Socket admission is **unreleased source support**, not support in desktop RC5.
+Keep the component feature and add the existing extensible host API declaration:
+
+```json
+"requires": ["wasm-components-v1", "host-api-v1"],
+"host_api": {"required": {"wasm.sockets": 1}},
+"capabilities": ["wasm", "net"]
+```
+
+The importer must declare the requirement even when only DNS or socket type
+interfaces appear in its imports. An optional declaration or another ABI
+version is insufficient. A host without `wasm.sockets@1` still reads the catalog,
+but refuses this app before installation and checks again at launch. Do not add
+a new `requires` feature for sockets: RC5 rejects an entire catalog containing
+an unknown feature. The host owns socket quotas, call deadlines, cancellation
+and cleanup; this declaration grants no OS permission. Check the actual host's
+runtime inventory before running socket code.
 
 A component follows a module's name and size rules and counts toward the 8
 function files. Each admitted component gets a warning that tells a reviewer
@@ -418,9 +438,13 @@ With `--catalog`, the gate resolves each component in that catalog. The
 `components` check refuses the app when a component is missing (`is not in
 the catalog`), withdrawn (`was withdrawn: <reason>`) or has another digest
 (`pins blake3 …, but the catalog's file hashes to …`). Missing `storage`,
-`net` or `wasm` usage declarations do not refuse the component. Each component then
-gets a line that says what it reaches in this app. Without `--catalog`, the
-gate warns that it cannot resolve the components.
+`net` or `wasm` usage declarations do not refuse the component. A component importing
+`wasi:sockets` requires the app's `host_api.required` to include `"wasm.sockets": 1`,
+with `host-api-v1` in `requires`, just like a bundled component. Admission checks
+this from the catalog's reviewed import list. The store checks it before fetching
+or reusing cached components, and checks host API availability before download and
+again at launch. Each component then gets a line that says what it reaches in
+this app. Without `--catalog`, the gate warns that it cannot resolve the components.
 
 This rehearsal ran on a local development hub (see
 [Rehearse with a development hub](#rehearse-with-a-development-hub)) whose
@@ -565,7 +589,7 @@ hub: the component was refused
 | `component` | A field in the tables above breaks its rule, or the release's imports or exports are not the file's. |
 | `digest` | The file's BLAKE3 digest or size is not the release's. |
 | `size` | The file is over 8 MiB. |
-| `contents-invalid` | The file is not a valid component, or imports anything outside `wasi:cli`, `wasi:clocks`, `wasi:filesystem`, `wasi:http`, `wasi:io`, `wasi:random` and `octosense:host`. |
+| `contents-invalid` | The file is not a valid component, or imports anything outside `wasi:cli`, `wasi:clocks`, `wasi:filesystem`, `wasi:http`, `wasi:io`, `wasi:random`, `wasi:sockets` and `octosense:host`. |
 | `publisher-signature` | The release has no GitHub provenance (a warning with `--allow-unsigned`), or its proof fails. |
 | `identity` (with `--catalog`) | An app in the catalog has the component's id. |
 | `version` (with `--catalog`) | The catalog already holds this version. |

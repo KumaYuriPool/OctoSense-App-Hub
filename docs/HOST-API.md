@@ -97,6 +97,18 @@ Plain Makepad still refuses apps that require the unsupported device broker.
 
 ## Discover what the host implements
 
+### WASI sockets (unreleased)
+
+Components importing `wasi:sockets` require `wasm.sockets@1` in
+`host_api.required`, with the existing `host-api-v1` feature in `requires`.
+This is a runtime ABI marker, not a `host.request` method; TCP, UDP and DNS
+operations use standard WASI interfaces. RC5 can read this requirement but
+cannot satisfy it, so installation is refused without invalidating the catalog.
+The same requirement applies when an app pins a shared socket component.
+See [WebAssembly components](PUBLISHING.md#webassembly-components) for admission
+and declaration rules. Confirm runtime/platform support in the actual host;
+this source change does not update a released binary.
+
 ### Native device calendars (contract 1.10)
 
 The new `device_calendar` capability is separate from `calendar` (the system

@@ -36,6 +36,15 @@ impl Fixture {
         fixture
     }
 
+    /// The extensible socket ABI requirement: old hosts still read the catalog.
+    pub fn socket_api(&mut self) {
+        if !self.manifest.requires.iter().any(|f| f == "host-api-v1") {
+            self.manifest.requires.push("host-api-v1".into());
+        }
+        self.manifest.host_api.get_or_insert_with(Default::default).required.insert("wasm.sockets".into(), 1);
+        self.sign();
+    }
+
     /// The same app as an L0 card (`page.card`, its data and its kit).
     pub fn card(&mut self) {
         fs::remove_file(self.bundle.join("main.splash")).unwrap();
